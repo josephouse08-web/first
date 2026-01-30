@@ -11,6 +11,7 @@
       --card: rgba(255,255,255,.08);
       --stroke: rgba(255,255,255,.12);
       --text: rgba(255,255,255,.92);
+    
       --muted: rgba(255,255,255,.65);
       --shadow: 0 20px 60px rgba(0,0,0,.45);
       --radius: 22px;
@@ -547,30 +548,25 @@
       return `${y}-${m}-${day}`;
     }
 
-    // ✅ 오늘의 추천 로드/생성 (하루 고정)
-    function getDailyRecommendation(includeBonus){
-      const key = "lotto_daily_rec_v1";
+    // ✅ 오늘의 추천 로드/생성 (하루 고정, 보너스 설정과 무관하게 동일 번호)
+    function getDailyRecommendation(){
+      const key = "lotto_daily_rec_v2";
       const tKey = todayKey();
 
       try{
         const raw = localStorage.getItem(key);
         if (raw){
           const saved = JSON.parse(raw);
-          // 오늘 날짜 + 보너스 설정이 같으면 그대로 사용
-          if (saved?.date === tKey && saved?.includeBonus === includeBonus && saved?.game?.main?.length === 6){
+          if (saved?.date === tKey && saved?.game?.main?.length === 6 && saved?.game?.bonus != null){
             return saved.game;
           }
         }
       }catch(e){ /* ignore */ }
 
-      // 새로 생성해서 저장
-      const game = drawOneGame(includeBonus);
+      // 항상 보너스 포함해서 생성·저장 (표시 여부만 토글로 결정)
+      const game = drawOneGame(true);
       try{
-        localStorage.setItem(key, JSON.stringify({
-          date: tKey,
-          includeBonus,
-          game
-        }));
+        localStorage.setItem(key, JSON.stringify({ date: tKey, game }));
       }catch(e){ /* ignore */ }
       return game;
     }
@@ -667,7 +663,7 @@
       bonusEl.checked = !bonusEl.checked;
       syncBonusUI();
 
-      const daily = getDailyRecommendation(bonusEl.checked);
+      const daily = getDailyRecommendation();
       renderRecommendation(daily, bonusEl.checked);
 
       toast(bonusEl.checked ? "보너스 사용 ✅" : "보너스 미사용");
@@ -681,7 +677,7 @@
       toast("새로 추첨했어요 🎲");
 
       // ✅ 추첨해도 오늘의 추천은 그대로(오늘 저장값을 다시 렌더만)
-      const daily = getDailyRecommendation(includeBonus);
+      const daily = getDailyRecommendation();
       renderRecommendation(daily, includeBonus);
     });
 
@@ -725,7 +721,7 @@
       countInfoEl.textContent = `총 ${games.length}게임`;
 
       // ✅ 오늘의 추천(하루 고정)
-      const daily = getDailyRecommendation(includeBonus);
+      const daily = getDailyRecommendation();
       renderRecommendation(daily, includeBonus);
     })();
   </script>
