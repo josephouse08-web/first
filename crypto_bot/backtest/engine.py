@@ -130,7 +130,8 @@ class BacktestEngine:
         self.config = config or {}
         self.commission_rate = self.config.get("commission_rate", 0.001)
 
-    def run(self, candles: list[Candle], strategies: list, risk_config: dict = None) -> BacktestResult:
+    def run(self, candles: list[Candle], strategies: list, risk_config: dict = None,
+            allow_short: bool = True) -> BacktestResult:
         """
         백테스트 실행
 
@@ -138,6 +139,7 @@ class BacktestEngine:
             candles: 과거 캔들 데이터
             strategies: 테스트할 전략 리스트
             risk_config: 리스크 매니저 설정
+            allow_short: 숏 포지션 허용 여부 (기본 True)
         """
         if not candles or not strategies:
             return BacktestResult([], 0, 0, candles)
@@ -153,7 +155,7 @@ class BacktestEngine:
         trades: list[TradeResult] = []
         lookback = self.config.get("lookback", 50)
 
-        logger.info(f"백테스트 시작 | 캔들: {len(candles)} | 전략: {[s.name for s in strategies]}")
+        logger.info(f"백테스트 시작 | 캔들: {len(candles)} | 전략: {[s.name for s in strategies]} | 숏 허용: {allow_short}")
 
         for i in range(lookback, len(candles)):
             window = candles[:i + 1]
@@ -189,31 +191,61 @@ class BacktestEngine:
                 continue
 
             # 매수 시그널
-            if combined.type == SignalType.BUY and position is None:
-                quantity = risk_manager.calculate_position_size(portfolio, current_price, combined.strength)
-                if quantity <= 0:
-                    continue
-                sl, tp = risk_manager.calculate_sl_tp(current_price, Side.BUY)
-                cost = quantity * current_price
-                commission = cost * self.commission_rate
-                portfolio.available_balance -= cost + commission
+            if combined.type == SignalType.BUY:
+                # 숏 포지션 보유 중이면 청산
+                if position and position.side == Side.SELL:
+                    trade = self._close_position(position, current_price, current_candle.timestamp, "시그널 반전(숏→롱)")
+                    trades.append(trade)
+                    portfolio.available_balance += trade.quantity * trade.exit_price + trade.pnl
+                    position = None
 
-                position = Position(
-                    symbol="BACKTEST",
-                    side=Side.BUY,
-                    entry_price=current_price,
-                    quantity=quantity,
-                    stop_loss=sl,
-                    take_profit=tp,
-                    opened_at=current_candle.timestamp,
-                )
+                if position is None:
+                    quantity = risk_manager.calculate_position_size(portfolio, current_price, combined.strength)
+                    if quantity <= 0:
+                        continue
+                    sl, tp = risk_manager.calculate_sl_tp(current_price, Side.BUY)
+                    cost = quantity * current_price
+                    commission = cost * self.commission_rate
+                    portfolio.available_balance -= cost + commission
 
-            # 매도 시그널 (기존 롱 포지션 청산)
-            elif combined.type == SignalType.SELL and position and position.side == Side.BUY:
-                trade = self._close_position(position, current_price, current_candle.timestamp, "매도 시그널")
-                trades.append(trade)
-                portfolio.available_balance += trade.quantity * trade.exit_price + trade.pnl
-                position = None
+                    position = Position(
+                        symbol="BACKTEST",
+                        side=Side.BUY,
+                        entry_price=current_price,
+                        quantity=quantity,
+                        stop_loss=sl,
+                        take_profit=tp,
+                        opened_at=current_candle.timestamp,
+                    )
+
+            # 매도 시그널
+            elif combined.type == SignalType.SELL:
+                # 롱 포지션 보유 중이면 청산
+                if position and position.side == Side.BUY:
+                    trade = self._close_position(position, current_price, current_candle.timestamp, "시그널 반전(롱→숏)")
+                    trades.append(trade)
+                    portfolio.available_balance += trade.quantity * trade.exit_price + trade.pnl
+                    position = None
+
+                # 숏 진입
+                if position is None and allow_short:
+                    quantity = risk_manager.calculate_position_size(portfolio, current_price, combined.strength)
+                    if quantity <= 0:
+                        continue
+                    sl, tp = risk_manager.calculate_sl_tp(current_price, Side.SELL)
+                    cost = quantity * current_price
+                    commission = cost * self.commission_rate
+                    portfolio.available_balance -= cost + commission
+
+                    position = Position(
+                        symbol="BACKTEST",
+                        side=Side.SELL,
+                        entry_price=current_price,
+                        quantity=quantity,
+                        stop_loss=sl,
+                        take_profit=tp,
+                        opened_at=current_candle.timestamp,
+                    )
 
         # 남은 포지션 청산
         if position:

@@ -84,7 +84,8 @@ def fetch_binance_klines(symbol: str, interval: str, start_time: int,
     return all_candles
 
 
-def run_single_backtest(strategies, candles, risk_config=None, bt_config=None):
+def run_single_backtest(strategies, candles, risk_config=None, bt_config=None,
+                        allow_short=True):
     """단일 백테스트 실행"""
     default_risk = {
         "max_risk_per_trade": 0.02,
@@ -104,7 +105,7 @@ def run_single_backtest(strategies, candles, risk_config=None, bt_config=None):
         default_bt.update(bt_config)
 
     engine = BacktestEngine(default_bt)
-    return engine.run(candles, strategies, default_risk)
+    return engine.run(candles, strategies, default_risk, allow_short=allow_short)
 
 
 def print_result_row(name, r, market_return=None):

@@ -151,7 +151,7 @@ def run_single_backtest(strategies, candles, risk_config=None, bt_config=None):
         default_bt.update(bt_config)
 
     engine = BacktestEngine(default_bt)
-    return engine.run(candles, strategies, default_risk)
+    return engine.run(candles, strategies, default_risk, allow_short=True)
 
 
 def print_result_row(name, r):
