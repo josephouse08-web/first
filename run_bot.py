@@ -30,6 +30,11 @@ from crypto_bot.strategies.rsi_strategy import RSIStrategy
 from crypto_bot.strategies.macd_strategy import MACDStrategy
 from crypto_bot.strategies.bollinger_strategy import BollingerStrategy
 from crypto_bot.strategies.multi_strategy import MultiIndicatorStrategy
+from crypto_bot.strategies.orderblock_strategy import OrderBlockStrategy
+from crypto_bot.strategies.fvg_strategy import FVGStrategy
+from crypto_bot.strategies.trendline_channel_strategy import TrendlineChannelStrategy
+from crypto_bot.strategies.fakeout_strategy import FakeoutStrategy
+from crypto_bot.strategies.ict_combined_strategy import ICTCombinedStrategy
 from crypto_bot.notifications.notifier import ConsoleNotifier, TelegramNotifier, DiscordNotifier
 from crypto_bot.dashboard.app import Dashboard
 from crypto_bot.backtest.engine import BacktestEngine
@@ -84,6 +89,22 @@ def create_strategies(config: dict) -> list:
 
     if strategies_config.get("multi_indicator", {}).get("enabled", True):
         strategies.append(MultiIndicatorStrategy(strategies_config.get("multi_indicator", {})))
+
+    # ICT 전략
+    if strategies_config.get("orderblock", {}).get("enabled", False):
+        strategies.append(OrderBlockStrategy(strategies_config.get("orderblock", {})))
+
+    if strategies_config.get("fvg", {}).get("enabled", False):
+        strategies.append(FVGStrategy(strategies_config.get("fvg", {})))
+
+    if strategies_config.get("trendline_channel", {}).get("enabled", False):
+        strategies.append(TrendlineChannelStrategy(strategies_config.get("trendline_channel", {})))
+
+    if strategies_config.get("fakeout", {}).get("enabled", False):
+        strategies.append(FakeoutStrategy(strategies_config.get("fakeout", {})))
+
+    if strategies_config.get("ict_combined", {}).get("enabled", False):
+        strategies.append(ICTCombinedStrategy(strategies_config.get("ict_combined", {})))
 
     return strategies
 

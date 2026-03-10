@@ -27,28 +27,58 @@ trading:
   allow_short: false       # 숏 포지션 허용 여부
   min_strategy_agreement: 0.5  # 전략 동의 비율 (50% 이상 동의 시 실행)
 
-# 전략 설정
+# 전략 설정 (ICT 기반 - 쉽알남 매매법)
 strategies:
+  # === 기존 전략 (비활성화) ===
   rsi:
-    enabled: true
+    enabled: false
     rsi_period: 14
     rsi_oversold: 30
     rsi_overbought: 70
 
   macd:
-    enabled: true
+    enabled: false
     macd_fast: 12
     macd_slow: 26
     macd_signal: 9
 
   bollinger:
-    enabled: true
+    enabled: false
     bb_period: 20
     bb_std: 2.0
 
   multi_indicator:
-    enabled: true
+    enabled: false
     min_confirmations: 3
+
+  # === ICT 전략 (쉽알남 매매법) ===
+  orderblock:
+    enabled: true
+    ob_lookback: 50
+    impulse_threshold: 1.5
+    ob_max_age: 20
+
+  fvg:
+    enabled: true
+    fvg_lookback: 50
+    min_gap_atr_ratio: 0.3
+    fvg_max_age: 30
+
+  trendline_channel:
+    enabled: true
+    swing_lookback: 5
+    min_touches: 2
+    channel_tolerance: 0.003
+
+  fakeout:
+    enabled: true
+    swing_lookback: 5
+    wick_ratio_threshold: 0.6
+    structure_lookback: 30
+
+  ict_combined:
+    enabled: true
+    min_confluence: 2
 
 # 리스크 관리
 risk:

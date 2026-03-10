@@ -21,6 +21,11 @@ from crypto_bot.strategies.rsi_strategy import RSIStrategy
 from crypto_bot.strategies.macd_strategy import MACDStrategy
 from crypto_bot.strategies.bollinger_strategy import BollingerStrategy
 from crypto_bot.strategies.multi_strategy import MultiIndicatorStrategy
+from crypto_bot.strategies.orderblock_strategy import OrderBlockStrategy
+from crypto_bot.strategies.fvg_strategy import FVGStrategy
+from crypto_bot.strategies.trendline_channel_strategy import TrendlineChannelStrategy
+from crypto_bot.strategies.fakeout_strategy import FakeoutStrategy
+from crypto_bot.strategies.ict_combined_strategy import ICTCombinedStrategy
 
 
 # ───────────────────────────────────────────────────────────
@@ -164,16 +169,21 @@ def print_result_row(name, r):
 # ───────────────────────────────────────────────────────────
 
 STRATEGY_SETS = {
-    "RSI": lambda: [RSIStrategy({"rsi_period": 14, "rsi_oversold": 30, "rsi_overbought": 70})],
-    "MACD": lambda: [MACDStrategy()],
-    "Bollinger": lambda: [BollingerStrategy()],
-    "복합지표": lambda: [MultiIndicatorStrategy({"min_confirmations": 3})],
-    "RSI+MACD": lambda: [RSIStrategy(), MACDStrategy()],
-    "RSI+BB": lambda: [RSIStrategy(), BollingerStrategy()],
-    "MACD+BB": lambda: [MACDStrategy(), BollingerStrategy()],
-    "3종 (RSI+MACD+BB)": lambda: [RSIStrategy(), MACDStrategy(), BollingerStrategy()],
-    "올인 (4전략)": lambda: [RSIStrategy(), MACDStrategy(), BollingerStrategy(),
-                           MultiIndicatorStrategy({"min_confirmations": 3})],
+    # === ICT 전략 (쉽알남 매매법) ===
+    "오더블럭(OB)": lambda: [OrderBlockStrategy()],
+    "FVG": lambda: [FVGStrategy()],
+    "추세선/채널": lambda: [TrendlineChannelStrategy()],
+    "거짓돌파(Fakeout)": lambda: [FakeoutStrategy()],
+    "ICT 종합": lambda: [ICTCombinedStrategy({"min_confluence": 2})],
+    "OB+FVG": lambda: [OrderBlockStrategy(), FVGStrategy()],
+    "OB+추세선": lambda: [OrderBlockStrategy(), TrendlineChannelStrategy()],
+    "FVG+거짓돌파": lambda: [FVGStrategy(), FakeoutStrategy()],
+    "ICT 올인 (4전략)": lambda: [OrderBlockStrategy(), FVGStrategy(),
+                                TrendlineChannelStrategy(), FakeoutStrategy()],
+    # === 기존 전략 (비교용) ===
+    "RSI (기존)": lambda: [RSIStrategy({"rsi_period": 14, "rsi_oversold": 30, "rsi_overbought": 70})],
+    "MACD (기존)": lambda: [MACDStrategy()],
+    "Bollinger (기존)": lambda: [BollingerStrategy()],
 }
 
 
@@ -184,7 +194,7 @@ def main():
  | |   | '__| | | | '_ \| __/ _ \|  _ \ / _ \| __|
  | |___| |  | |_| | |_) | || (_) | |_) | (_) | |_
   \____|_|   \__, | .__/ \__\___/|____/ \___/ \__|
-             |___/|_|    🔥 대규모 백테스트 v2.0
+             |___/|_|    🔥 ICT 백테스트 v3.0 (쉽알남 매매법)
     """)
 
     NUM_CANDLES = 5000       # 캔들 수 (약 7개월 1시간봉)
@@ -195,7 +205,7 @@ def main():
     # PART 1: 시장 환경별 × 전략별 대규모 백테스트
     # ══════════════════════════════════════════════════════════
     print("=" * 120)
-    print("  PART 1: 시장 환경별 전략 성과 (5,000 캔들 × 8 시장 × 9 전략 = 72 백테스트)")
+    print(f"  PART 1: 시장 환경별 전략 성과 (5,000 캔들 × 8 시장 × {len(STRATEGY_SETS)} 전략 = {8*len(STRATEGY_SETS)} 백테스트)")
     print("=" * 120)
 
     regime_labels = {
