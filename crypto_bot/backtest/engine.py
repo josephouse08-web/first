@@ -194,7 +194,7 @@ class BacktestEngine:
             if combined.type == SignalType.BUY:
                 # 숏 포지션 보유 중이면 청산
                 if position and position.side == Side.SELL:
-                    trade = self._close_position(position, current_price, current_candle.timestamp, "시그널 반전(숏→롱)")
+                    trade = self._close_position(position, current_price, current_candle.timestamp, "매수 시그널(숏 청산)")
                     trades.append(trade)
                     portfolio.available_balance += trade.quantity * trade.exit_price + trade.pnl
                     position = None
@@ -220,32 +220,33 @@ class BacktestEngine:
 
             # 매도 시그널
             elif combined.type == SignalType.SELL:
-                # 롱 포지션 보유 중이면 청산
+                # 롱 포지션 보유 중이면 청산 (이건 항상)
                 if position and position.side == Side.BUY:
-                    trade = self._close_position(position, current_price, current_candle.timestamp, "시그널 반전(롱→숏)")
+                    trade = self._close_position(position, current_price, current_candle.timestamp, "매도 시그널(롱 청산)")
                     trades.append(trade)
                     portfolio.available_balance += trade.quantity * trade.exit_price + trade.pnl
                     position = None
 
-                # 숏 진입
+                # 숏 진입: 독립적으로 "숏을 쳐서 먹을 수 있는 상황"인지 판단
                 if position is None and allow_short:
-                    quantity = risk_manager.calculate_position_size(portfolio, current_price, combined.strength)
-                    if quantity <= 0:
-                        continue
-                    sl, tp = risk_manager.calculate_sl_tp(current_price, Side.SELL)
-                    cost = quantity * current_price
-                    commission = cost * self.commission_rate
-                    portfolio.available_balance -= cost + commission
+                    if self._is_short_setup_valid(combined, candles[:i + 1]):
+                        quantity = risk_manager.calculate_position_size(portfolio, current_price, combined.strength)
+                        if quantity <= 0:
+                            continue
+                        sl, tp = risk_manager.calculate_sl_tp(current_price, Side.SELL)
+                        cost = quantity * current_price
+                        commission = cost * self.commission_rate
+                        portfolio.available_balance -= cost + commission
 
-                    position = Position(
-                        symbol="BACKTEST",
-                        side=Side.SELL,
-                        entry_price=current_price,
-                        quantity=quantity,
-                        stop_loss=sl,
-                        take_profit=tp,
-                        opened_at=current_candle.timestamp,
-                    )
+                        position = Position(
+                            symbol="BACKTEST",
+                            side=Side.SELL,
+                            entry_price=current_price,
+                            quantity=quantity,
+                            stop_loss=sl,
+                            take_profit=tp,
+                            opened_at=current_candle.timestamp,
+                        )
 
         # 남은 포지션 청산
         if position:
@@ -291,6 +292,79 @@ class BacktestEngine:
             strategy="backtest",
             commission=commission,
         )
+
+    def _is_short_setup_valid(self, signal: Signal, candles: list[Candle]) -> bool:
+        """
+        독립적으로 숏 진입이 유효한지 판단.
+        매도 시그널이 왔다고 무조건 숏을 치는 게 아니라,
+        차트를 보고 '숏을 치면 먹을 수 있겠다'고 판단될 때만 진입.
+        """
+        if len(candles) < 50:
+            return False
+
+        recent = candles[-50:]
+        closes = [c.close for c in recent]
+        highs = [c.high for c in recent]
+        lows = [c.low for c in recent]
+
+        # EMA 계산
+        ema20 = self._ema(closes, 20)
+        ema50 = self._ema(closes, 50)
+
+        score = 0
+
+        # 1) 추세 방향: EMA20 < EMA50 = 하락 추세 (+1)
+        if ema20[-1] < ema50[-1]:
+            score += 1
+
+        # 2) 가격이 EMA20 아래 = 약세 확인 (+1)
+        if closes[-1] < ema20[-1]:
+            score += 1
+
+        # 3) 하락 구조: 최근 스윙 고점이 낮아지는 패턴 (Lower Highs)
+        swing_highs = []
+        for i in range(2, len(recent) - 2):
+            if recent[i].high > recent[i-1].high and recent[i].high > recent[i-2].high \
+               and recent[i].high > recent[i+1].high and recent[i].high > recent[i+2].high:
+                swing_highs.append(recent[i].high)
+
+        if len(swing_highs) >= 2 and swing_highs[-1] < swing_highs[-2]:
+            score += 1
+
+        # 4) 하락 구조: 최근 스윙 저점이 낮아지는 패턴 (Lower Lows)
+        swing_lows = []
+        for i in range(2, len(recent) - 2):
+            if recent[i].low < recent[i-1].low and recent[i].low < recent[i-2].low \
+               and recent[i].low < recent[i+1].low and recent[i].low < recent[i+2].low:
+                swing_lows.append(recent[i].low)
+
+        if len(swing_lows) >= 2 and swing_lows[-1] < swing_lows[-2]:
+            score += 1
+
+        # 5) 최근 캔들 모멘텀: 최근 5개 중 음봉이 더 많으면 (+1)
+        recent_5 = candles[-5:]
+        bearish_count = sum(1 for c in recent_5 if c.close < c.open)
+        if bearish_count >= 3:
+            score += 1
+
+        # 6) 시그널 강도 기준: 숏은 더 높은 확신 필요 (0.5 이상)
+        if signal.strength >= 0.5:
+            score += 1
+
+        # 최소 3점 이상이어야 숏 진입 허용
+        return score >= 3
+
+    @staticmethod
+    def _ema(values: list[float], period: int) -> list[float]:
+        """지수 이동평균 (내부 헬퍼)"""
+        result = []
+        multiplier = 2 / (period + 1)
+        for i, val in enumerate(values):
+            if i == 0:
+                result.append(val)
+            else:
+                result.append((val - result[-1]) * multiplier + result[-1])
+        return result
 
     def _combine_signals(self, signals: list[Signal]) -> Optional[Signal]:
         buy_strength = sum(s.strength for s in signals if s.type == SignalType.BUY)
