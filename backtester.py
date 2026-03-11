@@ -72,10 +72,15 @@ class SMCBacktester:
     TRAILING_STEP_PCT = 0.3       # 수익의 30% 지점에 손절선 이동 (70% 수익 보호)
     CONSECUTIVE_LOSS_COOLDOWN = 2  # N연패 후 1사이클 쿨다운
 
-    def __init__(self, coin: str = None, initial_balance: float = 1_000_000):
+    def __init__(self, coin: str = None, initial_balance: float = 1_000_000,
+                 leverage: int = 1):
         self.coin = coin or Config.COIN
         self.initial_balance = initial_balance
         self.balance = initial_balance
+        self.leverage = leverage
+        # 선물 수수료: 메이커 0.02%, 테이커 0.04% (바이낸스 기준)
+        # 현물 수수료: 업비트 0.05%
+        self.fee_pct = 0.04 if leverage > 1 else 0.05  # 편도 수수료(%)
         self.analyzer = AIAnalyzer()
         self.trades: list[BacktestTrade] = []
         self.trade_counter = 0
@@ -92,12 +97,15 @@ class SMCBacktester:
             days_back: 며칠 전 데이터부터 테스트할지
             analysis_interval_candles: 몇 캔들마다 AI 분석할지 (비용 절약)
         """
+        mode = "선물" if self.leverage > 1 else "현물"
         logger.info("=" * 60)
         logger.info("SMC 백테스트 시작")
-        logger.info(f"코인: {self.coin}")
+        logger.info(f"코인: {self.coin} ({mode} {self.leverage}x)")
         logger.info(f"초기 자본: {self.initial_balance:,.0f}원")
+        logger.info(f"수수료: {self.fee_pct}% (편도)")
         logger.info(f"기간: 최근 {days_back}일")
-        logger.info(f"분석 간격: {analysis_interval_candles}캔들마다")
+        logger.info(f"AI 분석 간격: {analysis_interval_candles}캔들마다")
+        logger.info(f"손절/익절 체크: 매 캔들(5분)마다")
         logger.info("=" * 60)
 
         # 1. 히스토리 데이터 수집 (5분봉 기준 스캘핑)
@@ -110,30 +118,47 @@ class SMCBacktester:
         logger.info(f"총 {len(all_data)}개 캔들 수집 완료")
         logger.info(f"기간: {all_data.index[0]} ~ {all_data.index[-1]}")
 
-        # 2. 슬라이딩 윈도우로 분석
+        # 2. 매 캔들마다 손절/익절 체크, N캔들마다 AI 분석
         window_size = Config.CANDLE_COUNT  # 80캔들 윈도우
-        total_windows = (len(all_data) - window_size) // analysis_interval_candles
-        logger.info(f"총 {total_windows}개 분석 포인트")
+        total_analyses = (len(all_data) - window_size) // analysis_interval_candles
+        analysis_count = 0
+        candles_since_analysis = analysis_interval_candles  # 첫 캔들에서 바로 분석
 
-        for i in range(0, len(all_data) - window_size, analysis_interval_candles):
-            window = all_data.iloc[i:i + window_size]
-            current_idx = i + window_size - 1
+        for current_idx in range(window_size, len(all_data)):
             current_candle = all_data.iloc[current_idx]
             current_price = current_candle["close"]
+            current_high = current_candle["high"]
+            current_low = current_candle["low"]
             current_time = all_data.index[current_idx]
 
-            step = (i // analysis_interval_candles) + 1
+            # ── 매 캔들: 포지션 손절/익절 체크 (고가/저가로 정밀 체크) ──
+            if self.position:
+                # 캔들 내 고가/저가로 체크 (실제 가격 움직임 반영)
+                exit_reason = self._check_position_exit_candle(
+                    current_high, current_low, current_price, current_time
+                )
+                if exit_reason:
+                    self._close_position(
+                        self._get_exit_price(exit_reason, current_high, current_low, current_price),
+                        current_time, exit_reason
+                    )
+
+            # 청산된 포지션 체크 (레버리지 청산)
+            if self.position and self.leverage > 1:
+                self._check_liquidation(current_low if self.position["direction"] == "long" else current_high, current_time)
+
+            # ── N캔들마다: AI 분석 ──
+            candles_since_analysis += 1
+            if candles_since_analysis < analysis_interval_candles:
+                continue
+            candles_since_analysis = 0
+            analysis_count += 1
+
             logger.info(
-                f"\n--- 분석 {step}/{total_windows} "
+                f"\n--- AI 분석 {analysis_count}/{total_analyses} "
                 f"({current_time.strftime('%m/%d %H:%M')}) "
                 f"가격: {current_price:,.0f}원 ---"
             )
-
-            # 포지션 보유 중이면 손절/익절 체크
-            if self.position:
-                exit_reason = self._check_position_exit(current_price, current_time)
-                if exit_reason:
-                    self._close_position(current_price, current_time, exit_reason)
 
             # 멀티 타임프레임 차트 생성
             tf_data = self._build_multi_timeframe(all_data, current_idx)
@@ -149,7 +174,7 @@ class SMCBacktester:
                 f"현재가: {current_price:,.0f}원, 코인: {self.coin}, "
                 f"시각: {current_time.strftime('%Y-%m-%d %H:%M')}, "
                 f"타임프레임: {', '.join(tf_data.keys())}, "
-                f"백테스트 모드: 롱/숏 모두 가능"
+                f"모드: {mode} {self.leverage}x 레버리지, 롱/숏 모두 가능"
             )
 
             try:
@@ -365,6 +390,123 @@ class SMCBacktester:
 
         return None
 
+    def _check_position_exit_candle(self, high: float, low: float,
+                                     close: float, current_time) -> str:
+        """캔들의 고가/저가로 정밀 손절/익절 체크 (매 5분봉마다 호출)"""
+        if not self.position:
+            return ""
+
+        direction = self.position["direction"]
+        entry = self.position["entry_price"]
+        target = self.position.get("target_price")
+        stop = self.position.get("stop_loss")
+        trailing_active = self.position.get("trailing_active", False)
+        best_price = self.position.get("best_price", entry)
+
+        if direction == "long":
+            # 캔들 고가로 최고가 갱신
+            if high > best_price:
+                self.position["best_price"] = high
+                best_price = high
+
+            # 트레일링 활성화 체크
+            if not trailing_active and target:
+                activate_price = entry + (target - entry) * self.TRAILING_ACTIVATE_PCT
+                if high >= activate_price:
+                    trailing_active = True
+                    self.position["trailing_active"] = True
+                    self.position["stop_loss"] = entry
+                    stop = entry
+                    logger.info(
+                        f"  ↑ 트레일링 활성화 (고가 {high:,.0f}원) "
+                        f"(손절 → {stop:,.0f}원 본전)"
+                    )
+
+            # 트레일링 손절선 갱신
+            if trailing_active:
+                profit_from_entry = best_price - entry
+                new_stop = entry + profit_from_entry * (1 - self.TRAILING_STEP_PCT)
+                if new_stop > stop:
+                    self.position["stop_loss"] = new_stop
+                    stop = new_stop
+
+            # 익절 체크 (고가가 목표 도달)
+            if target and high >= target:
+                return "목표가 도달 (익절)"
+            # 손절 체크 (저가가 손절 도달)
+            if stop and low <= stop:
+                if trailing_active:
+                    return "트레일링 스탑 (수익 확보)"
+                return "손절가 도달 (손절)"
+
+        elif direction == "short":
+            # 캔들 저가로 최저가 갱신
+            if low < best_price:
+                self.position["best_price"] = low
+                best_price = low
+
+            # 트레일링 활성화
+            if not trailing_active and target:
+                activate_price = entry - (entry - target) * self.TRAILING_ACTIVATE_PCT
+                if low <= activate_price:
+                    trailing_active = True
+                    self.position["trailing_active"] = True
+                    self.position["stop_loss"] = entry
+                    stop = entry
+                    logger.info(
+                        f"  ↓ 트레일링 활성화 (저가 {low:,.0f}원) "
+                        f"(손절 → {stop:,.0f}원 본전)"
+                    )
+
+            # 트레일링 손절선 갱신
+            if trailing_active:
+                profit_from_entry = entry - best_price
+                new_stop = entry - profit_from_entry * (1 - self.TRAILING_STEP_PCT)
+                if new_stop < stop:
+                    self.position["stop_loss"] = new_stop
+                    stop = new_stop
+
+            # 익절 (저가가 목표 도달)
+            if target and low <= target:
+                return "목표가 도달 (익절)"
+            # 손절 (고가가 손절 도달)
+            if stop and high >= stop:
+                if trailing_active:
+                    return "트레일링 스탑 (수익 확보)"
+                return "손절가 도달 (손절)"
+
+        return ""
+
+    def _get_exit_price(self, reason: str, high: float, low: float, close: float) -> float:
+        """청산 사유에 따른 실제 청산가 결정"""
+        direction = self.position["direction"]
+        target = self.position.get("target_price")
+        stop = self.position.get("stop_loss")
+
+        if "익절" in reason and target:
+            return target  # 목표가 정확히 체결
+        if "손절" in reason or "트레일링" in reason:
+            if stop:
+                return stop  # 손절가 정확히 체결
+        return close
+
+    def _check_liquidation(self, worst_price: float, current_time):
+        """레버리지 강제 청산 체크"""
+        if not self.position or self.leverage <= 1:
+            return
+        direction = self.position["direction"]
+        entry = self.position["entry_price"]
+
+        if direction == "long":
+            pnl_pct = (worst_price - entry) / entry * self.leverage * 100
+        else:
+            pnl_pct = (entry - worst_price) / entry * self.leverage * 100
+
+        # -90% 이상 손실 시 강제 청산 (마진 부족)
+        if pnl_pct <= -90:
+            logger.info(f"  !! 강제 청산 (레버리지 {self.leverage}x 마진콜)")
+            self._close_position(worst_price, current_time, f"강제 청산 ({self.leverage}x 마진콜)")
+
     def _check_position_exit(self, current_price: float, current_time) -> str:
         """포지션 손절/익절 + 트레일링 스탑 체크"""
         if not self.position:
@@ -461,14 +603,15 @@ class SMCBacktester:
         direction = self.position["direction"]
         entry_price = self.position["entry_price"]
 
-        # 수익률 계산
+        # 수익률 계산 (레버리지 적용)
         if direction == "long":
-            pnl_pct = (exit_price - entry_price) / entry_price * 100
+            pnl_pct = (exit_price - entry_price) / entry_price * 100 * self.leverage
         else:  # short
-            pnl_pct = (entry_price - exit_price) / entry_price * 100
+            pnl_pct = (entry_price - exit_price) / entry_price * 100 * self.leverage
 
-        # 수수료 반영 (업비트 0.05% x 2 = 0.1%)
-        pnl_pct -= 0.1
+        # 수수료 반영 (편도 × 2 × 레버리지)
+        fee_total = self.fee_pct * 2 * self.leverage
+        pnl_pct -= fee_total
 
         trade_amount = min(Config.TRADE_AMOUNT, self.balance)
         pnl_krw = trade_amount * (pnl_pct / 100)
@@ -652,9 +795,12 @@ def main():
                         help="분석 간격 (캔들 수, 12=1시간마다)")
     parser.add_argument("--balance", type=float, default=1_000_000,
                         help="초기 자본 (원)")
+    parser.add_argument("--leverage", type=int, default=1,
+                        help="레버리지 배수 (1=현물, 10=선물10x 등)")
     args = parser.parse_args()
 
-    tester = SMCBacktester(coin=args.coin, initial_balance=args.balance)
+    tester = SMCBacktester(coin=args.coin, initial_balance=args.balance,
+                           leverage=args.leverage)
     tester.run(days_back=args.days, analysis_interval_candles=args.interval)
 
 
