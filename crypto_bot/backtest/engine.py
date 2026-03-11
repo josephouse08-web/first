@@ -53,6 +53,40 @@ class BacktestResult:
         losses = [t.pnl for t in self.trades if t.pnl <= 0]
         return sum(losses) / len(losses) if losses else 0
 
+    # ── 롱/숏 분리 통계 ──
+    @property
+    def long_trades(self) -> list:
+        return [t for t in self.trades if t.side == Side.BUY]
+
+    @property
+    def short_trades(self) -> list:
+        return [t for t in self.trades if t.side == Side.SELL]
+
+    def _side_stats(self, trades: list) -> dict:
+        """롱 또는 숏 거래의 통계 반환"""
+        if not trades:
+            return {"count": 0, "pnl": 0, "win_rate": 0, "avg_win": 0, "avg_loss": 0, "pf": 0}
+        total_pnl = sum(t.pnl for t in trades)
+        wins = [t for t in trades if t.pnl > 0]
+        losses = [t for t in trades if t.pnl <= 0]
+        win_rate = len(wins) / len(trades) * 100 if trades else 0
+        avg_win = sum(t.pnl for t in wins) / len(wins) if wins else 0
+        avg_loss = sum(t.pnl for t in losses) / len(losses) if losses else 0
+        gross_profit = sum(t.pnl for t in wins)
+        gross_loss = abs(sum(t.pnl for t in losses))
+        pf = gross_profit / gross_loss if gross_loss > 0 else float("inf")
+        pnl_pct = (total_pnl / self.initial_balance) * 100
+        return {"count": len(trades), "pnl": total_pnl, "pnl_pct": pnl_pct,
+                "win_rate": win_rate, "avg_win": avg_win, "avg_loss": avg_loss, "pf": pf}
+
+    @property
+    def long_stats(self) -> dict:
+        return self._side_stats(self.long_trades)
+
+    @property
+    def short_stats(self) -> dict:
+        return self._side_stats(self.short_trades)
+
     @property
     def profit_factor(self) -> float:
         gross_profit = sum(t.pnl for t in self.trades if t.pnl > 0)

@@ -114,9 +114,13 @@ def print_result_row(name, r, market_return=None):
         print(f"  {name:<28} {'거래 없음':>10}")
         return
     alpha = f" (α: {r.total_return - market_return:+.2f}%)" if market_return is not None else ""
+    ls = r.long_stats
+    ss = r.short_stats
+    long_info = f"L:{ls['count']}({ls['pnl_pct']:+.1f}%)" if ls['count'] > 0 else "L:0"
+    short_info = f"S:{ss['count']}({ss['pnl_pct']:+.1f}%)" if ss['count'] > 0 else "S:0"
     print(f"  {name:<28} {r.total_return:>+8.2f}%  {r.win_rate:>6.1f}%  "
           f"{trades:>5}  {r.max_drawdown:>7.2f}%  {r.sharpe_ratio:>7.2f}  "
-          f"{r.profit_factor:>7.2f}  {r.avg_win:>9.2f}  {r.avg_loss:>9.2f}{alpha}")
+          f"{r.profit_factor:>7.2f}  {long_info:>16}  {short_info:>16}{alpha}")
 
 
 # 전략 셋
@@ -206,7 +210,7 @@ def main():
                   f"${start_p:,.0f} → ${end_p:,.0f}")
             print(f"{'─'*120}")
             print(f"  {'전략':<28} {'수익률':>8}  {'승률':>6}  {'거래':>5}  "
-                  f"{'MDD':>7}  {'샤프':>7}  {'PF':>7}  {'평균수익':>9}  {'평균손실':>9}  알파")
+                  f"{'MDD':>7}  {'샤프':>7}  {'PF':>7}  {'롱(수익률)':>16}  {'숏(수익률)':>16}  알파")
             print(f"  {'-'*115}")
 
             key = f"{symbol_label}_{period_key}"
