@@ -1,0 +1,33 @@
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+class Config:
+    # Upbit API
+    UPBIT_ACCESS_KEY = os.getenv("UPBIT_ACCESS_KEY", "")
+    UPBIT_SECRET_KEY = os.getenv("UPBIT_SECRET_KEY", "")
+
+    # Anthropic API
+    ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+
+    # Trading Settings
+    COIN = os.getenv("COIN", "KRW-BTC")
+    TRADE_AMOUNT = float(os.getenv("TRADE_AMOUNT", "50000"))
+    DAILY_TARGET = float(os.getenv("DAILY_TARGET", "2.0"))
+    MAX_LOSS = float(os.getenv("MAX_LOSS", "-1.0"))
+    DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
+    ANALYSIS_INTERVAL = int(os.getenv("ANALYSIS_INTERVAL", "60"))
+
+    # Timeframes for scalping
+    TIMEFRAMES = ["minute5", "minute10", "minute30", "minute60"]
+    CANDLE_COUNT = 60  # Number of candles to fetch per timeframe
+
+    # Risk Management
+    MAX_DAILY_TRADES = 20
+    MIN_CONFIDENCE = 0.7
+    MIN_TRADE_INTERVAL = 120  # seconds between trades
+
+    # Claude model
+    CLAUDE_MODEL = "claude-sonnet-4-20250514"
