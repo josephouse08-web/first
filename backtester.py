@@ -71,6 +71,7 @@ class SMCBacktester:
     TRAILING_ACTIVATE_PCT = 0.5   # 목표가까지 50% 도달 시 트레일링 활성화
     TRAILING_STEP_PCT = 0.3       # 수익의 30% 지점에 손절선 이동 (70% 수익 보호)
     CONSECUTIVE_LOSS_COOLDOWN = 2  # N연패 후 1사이클 쿨다운
+    MAX_STOP_LOSS_PCT = 3.0       # 1건당 최대 손절폭 % (레버리지 적용 전 기준)
 
     def __init__(self, coin: str = None, initial_balance: float = 1_000_000,
                  leverage: int = 1):
@@ -90,27 +91,31 @@ class SMCBacktester:
         self.consecutive_losses = 0  # 연속 손실 카운터
         self.cooldown_remaining = 0  # 쿨다운 남은 사이클
 
-    def run(self, days_back: int = 7, analysis_interval_candles: int = 10) -> BacktestResult:
+    def run(self, days_back: int = 7, analysis_interval_candles: int = 10,
+            offset_days: int = 0) -> BacktestResult:
         """백테스트 실행
 
         Args:
-            days_back: 며칠 전 데이터부터 테스트할지
+            days_back: 며칠간의 데이터로 테스트할지
             analysis_interval_candles: 몇 캔들마다 AI 분석할지 (비용 절약)
+            offset_days: 오늘 기준 며칠 전부터 시작 (0=오늘까지, 14=2주 전까지)
         """
         mode = "선물" if self.leverage > 1 else "현물"
+        period_desc = f"최근 {days_back}일" if offset_days == 0 else f"{offset_days+days_back}~{offset_days}일 전"
         logger.info("=" * 60)
         logger.info("SMC 백테스트 시작")
         logger.info(f"코인: {self.coin} ({mode} {self.leverage}x)")
         logger.info(f"초기 자본: {self.initial_balance:,.0f}원")
         logger.info(f"수수료: {self.fee_pct}% (편도)")
-        logger.info(f"기간: 최근 {days_back}일")
+        logger.info(f"기간: {period_desc}")
+        logger.info(f"최대 손절폭: {self.MAX_STOP_LOSS_PCT}% (레버리지 전)")
         logger.info(f"AI 분석 간격: {analysis_interval_candles}캔들마다")
         logger.info(f"손절/익절 체크: 매 캔들(5분)마다")
         logger.info("=" * 60)
 
         # 1. 히스토리 데이터 수집 (5분봉 기준 스캘핑)
         logger.info("히스토리 데이터 수집 중...")
-        all_data = self._fetch_historical_data(days_back)
+        all_data = self._fetch_historical_data(days_back, offset_days)
         if all_data is None or all_data.empty:
             logger.error("데이터 수집 실패")
             return self._build_result()
@@ -216,14 +221,22 @@ class SMCBacktester:
         self._save_result(result)
         return result
 
-    def _fetch_historical_data(self, days_back: int) -> pd.DataFrame:
-        """히스토리 5분봉 데이터 수집"""
+    def _fetch_historical_data(self, days_back: int, offset_days: int = 0) -> pd.DataFrame:
+        """히스토리 5분봉 데이터 수집
+
+        Args:
+            days_back: 수집할 기간 (일)
+            offset_days: 오늘 기준 며칠 전부터 끝나는지 (0=현재, 14=2주 전)
+        """
         all_frames = []
         # pyupbit은 한 번에 최대 200개 캔들 반환
         candles_needed = days_back * 24 * 12  # 5분봉 = 하루 288개
         fetched = 0
 
+        # offset_days > 0이면 과거 시점부터 시작
         to = None
+        if offset_days > 0:
+            to = datetime.now() - timedelta(days=offset_days)
         while fetched < candles_needed:
             try:
                 count = min(200, candles_needed - fetched)
@@ -313,6 +326,26 @@ class SMCBacktester:
         if not target_price or not stop_loss:
             logger.info("  → 패스 (유효하지 않은 목표가/손절가)")
             return
+
+        # 최대 손절폭 제한 적용
+        if direction == "buy":
+            raw_sl_pct = abs(price - stop_loss) / price * 100
+        elif direction == "sell":
+            raw_sl_pct = abs(stop_loss - price) / price * 100
+        else:
+            raw_sl_pct = 0
+
+        if raw_sl_pct > self.MAX_STOP_LOSS_PCT:
+            # 손절폭을 MAX_STOP_LOSS_PCT로 강제 축소
+            old_sl = stop_loss
+            if decision == "buy":
+                stop_loss = price * (1 - self.MAX_STOP_LOSS_PCT / 100)
+            elif decision == "sell":
+                stop_loss = price * (1 + self.MAX_STOP_LOSS_PCT / 100)
+            logger.info(
+                f"  ✂ 손절폭 제한: {raw_sl_pct:.1f}% → {self.MAX_STOP_LOSS_PCT:.1f}% "
+                f"(손절가 {old_sl:,.0f} → {stop_loss:,.0f}원)"
+            )
 
         # 방향 결정
         if decision == "buy":
@@ -797,11 +830,18 @@ def main():
                         help="초기 자본 (원)")
     parser.add_argument("--leverage", type=int, default=1,
                         help="레버리지 배수 (1=현물, 10=선물10x 등)")
+    parser.add_argument("--offset", type=int, default=0,
+                        help="기간 오프셋 (일, 0=현재부터, 14=2주 전부터)")
+    parser.add_argument("--max-sl", type=float, default=None,
+                        help="최대 손절폭 %% (레버리지 전 기준)")
     args = parser.parse_args()
 
     tester = SMCBacktester(coin=args.coin, initial_balance=args.balance,
                            leverage=args.leverage)
-    tester.run(days_back=args.days, analysis_interval_candles=args.interval)
+    if args.max_sl is not None:
+        tester.MAX_STOP_LOSS_PCT = args.max_sl
+    tester.run(days_back=args.days, analysis_interval_candles=args.interval,
+               offset_days=args.offset)
 
 
 if __name__ == "__main__":
