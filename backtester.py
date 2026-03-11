@@ -328,9 +328,9 @@ class SMCBacktester:
             return
 
         # 최대 손절폭 제한 적용
-        if direction == "buy":
+        if decision == "buy":
             raw_sl_pct = abs(price - stop_loss) / price * 100
-        elif direction == "sell":
+        elif decision == "sell":
             raw_sl_pct = abs(stop_loss - price) / price * 100
         else:
             raw_sl_pct = 0
