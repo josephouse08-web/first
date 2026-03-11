@@ -29,6 +29,7 @@ from crypto_bot.strategies.fvg_strategy import FVGStrategy
 from crypto_bot.strategies.trendline_channel_strategy import TrendlineChannelStrategy
 from crypto_bot.strategies.fakeout_strategy import FakeoutStrategy
 from crypto_bot.strategies.ict_combined_strategy import ICTCombinedStrategy
+from crypto_bot.strategies.ict_context_strategy import ICTContextStrategy
 
 
 def fetch_binance_klines(symbol: str, interval: str, start_time: int,
@@ -118,9 +119,10 @@ def print_result_row(name, r, market_return=None):
     ss = r.short_stats
     long_info = f"L:{ls['count']}({ls['pnl_pct']:+.1f}%)" if ls['count'] > 0 else "L:0"
     short_info = f"S:{ss['count']}({ss['pnl_pct']:+.1f}%)" if ss['count'] > 0 else "S:0"
-    print(f"  {name:<28} {r.total_return:>+8.2f}%  {r.win_rate:>6.1f}%  "
-          f"{trades:>5}  {r.max_drawdown:>7.2f}%  {r.sharpe_ratio:>7.2f}  "
-          f"{r.profit_factor:>7.2f}  {long_info:>16}  {short_info:>16}{alpha}")
+    win_loss = f"{r.winning_trades}W/{r.losing_trades}L"
+    print(f"  {name:<28} {r.total_return:>+8.2f}%  {win_loss:>10}({r.win_rate:.0f}%)  "
+          f"{r.max_drawdown:>6.2f}%  {r.sharpe_ratio:>6.2f}  "
+          f"{r.profit_factor:>5.2f}  {long_info:>16}  {short_info:>16}{alpha}")
 
 
 # 전략 셋
@@ -134,6 +136,9 @@ STRATEGY_SETS = {
     "OB+FVG": lambda: [OrderBlockStrategy(), FVGStrategy()],
     "ICT 올인 (4전략)": lambda: [OrderBlockStrategy(), FVGStrategy(),
                                 TrendlineChannelStrategy(), FakeoutStrategy()],
+    # 신규: 컨텍스트 기반 종합 분석
+    "ICT 컨텍스트": lambda: [ICTContextStrategy()],
+    "ICT 컨텍스트+OB": lambda: [ICTContextStrategy(), OrderBlockStrategy()],
     # 기존 전략 (비교용)
     "RSI (기존)": lambda: [RSIStrategy()],
     "MACD (기존)": lambda: [MACDStrategy()],
@@ -209,8 +214,8 @@ def main():
                   f"시장수익률: {market_ret:+.2f}% | "
                   f"${start_p:,.0f} → ${end_p:,.0f}")
             print(f"{'─'*120}")
-            print(f"  {'전략':<28} {'수익률':>8}  {'승률':>6}  {'거래':>5}  "
-                  f"{'MDD':>7}  {'샤프':>7}  {'PF':>7}  {'롱(수익률)':>16}  {'숏(수익률)':>16}  알파")
+            print(f"  {'전략':<28} {'수익률':>8}  {'승/패(승률)':>14}  "
+                  f"{'MDD':>6}  {'샤프':>6}  {'PF':>5}  {'롱(수익률)':>16}  {'숏(수익률)':>16}  알파")
             print(f"  {'-'*115}")
 
             key = f"{symbol_label}_{period_key}"
