@@ -270,6 +270,14 @@ class SMCBacktester:
         target_price = analysis.get("target_price")
         stop_loss = analysis.get("stop_loss")
 
+        # AI가 축약 가격(예: 1.025 = 1억250만)을 반환하는 경우 보정
+        target_price = self._fix_price(target_price, price)
+        stop_loss = self._fix_price(stop_loss, price)
+
+        if not target_price or not stop_loss:
+            logger.info("  → 패스 (유효하지 않은 목표가/손절가)")
+            return
+
         # 방향 결정
         if decision == "buy":
             direction = "long"
@@ -313,6 +321,36 @@ class SMCBacktester:
             f"  ★ {direction.upper()} 진입 @ {price:,.0f}원 "
             f"(목표: {target_price:,.0f}원, 손절: {stop_loss:,.0f}원)"
         )
+
+    def _fix_price(self, raw_price, current_price: float):
+        """AI가 축약 가격(1.025 = 1억250만)을 반환하는 경우 실제 가격으로 변환"""
+        if raw_price is None:
+            return None
+        try:
+            raw_price = float(raw_price)
+        except (ValueError, TypeError):
+            return None
+
+        # 현재가 대비 너무 작으면 축약 형태로 판단
+        if current_price > 1_000_000 and raw_price < 10_000:
+            # 예: BTC 1억대에서 1.025 → 102,500,000
+            magnitude = 10 ** len(str(int(current_price)))
+            converted = raw_price * magnitude
+            # 현재가 대비 ±20% 범위 내인지 확인
+            if abs(converted - current_price) / current_price < 0.2:
+                return converted
+            # 다른 스케일 시도 (예: 102500 → 102,500,000)
+            for scale in [1000, 100, 10]:
+                converted = raw_price * scale
+                if abs(converted - current_price) / current_price < 0.2:
+                    return converted
+            return None
+
+        # 현재가 대비 ±20% 이내면 유효
+        if abs(raw_price - current_price) / current_price < 0.2:
+            return raw_price
+
+        return None
 
     def _check_position_exit(self, current_price: float, current_time) -> str:
         """포지션 손절/익절 체크"""
