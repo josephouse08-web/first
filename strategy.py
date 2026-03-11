@@ -1,7 +1,7 @@
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from datetime import datetime, date
+from dataclasses import dataclass
+from datetime import date
 from config import Config
 from logger_setup import setup_logger
 
@@ -24,7 +24,6 @@ class DailyStats:
     total_trades: int = 0
     winning_trades: int = 0
     losing_trades: int = 0
-    total_profit_pct: float = 0.0
     starting_balance: float = 0.0
     current_balance: float = 0.0
 
@@ -53,23 +52,29 @@ class DailyStats:
 
 
 class BaseStrategy(ABC):
-    """전략 기본 클래스 - 추후 사용자 전략 추가 시 이 클래스를 상속"""
-
     @abstractmethod
     def evaluate(self, analysis: dict, daily_stats: DailyStats,
                  current_position: dict) -> TradeAction:
         pass
 
 
-class ScalpingStrategy(BaseStrategy):
-    """기본 스캘핑 전략"""
+class SMCScalpingStrategy(BaseStrategy):
+    """SMC(Smart Money Concepts) 기반 스캘핑 전략
+
+    쉽알남 전략 원칙:
+    1. 다중 근거 (confluence) 2개 이상일 때만 진입
+    2. 오더블럭 / FVG 구간에서 진입
+    3. 추세선·채널 기반 방향성 확인
+    4. Fake out / Trap 감지 시 반대 방향 진입
+    5. 구조물 기반 손절/익절 (감이 아닌 기준)
+    """
 
     def __init__(self):
         self.last_trade_time = 0.0
         self.daily_stats = DailyStats()
+        self.last_analysis = {}
 
     def reset_daily(self, starting_balance: float):
-        """일일 통계 초기화"""
         today = date.today().isoformat()
         if self.daily_stats.date != today:
             self.daily_stats = DailyStats(
@@ -80,11 +85,9 @@ class ScalpingStrategy(BaseStrategy):
             logger.info(f"일일 통계 초기화: {today}, 시작 잔고: {starting_balance:,.0f}원")
 
     def update_balance(self, current_balance: float):
-        """현재 잔고 업데이트"""
         self.daily_stats.current_balance = current_balance
 
     def record_trade(self, is_profit: bool):
-        """거래 기록"""
         self.daily_stats.total_trades += 1
         if is_profit:
             self.daily_stats.winning_trades += 1
@@ -93,18 +96,17 @@ class ScalpingStrategy(BaseStrategy):
 
     def evaluate(self, analysis: dict, daily_stats: DailyStats = None,
                  current_position: dict = None) -> TradeAction:
-        """AI 분석 결과를 기반으로 매매 판단"""
+        """SMC 분석 결과 기반 매매 판단"""
         stats = daily_stats or self.daily_stats
         position = current_position or {}
 
-        # 일일 한도 체크
+        # === 일일 한도 체크 ===
         if stats.target_reached:
             logger.info(f"일일 목표 수익률 달성! ({stats.profit_pct:.2f}%)")
             return TradeAction(action="hold", reason="일일 목표 수익률 달성")
 
         if stats.max_loss_reached:
             logger.warning(f"일일 최대 손실 도달! ({stats.profit_pct:.2f}%)")
-            # 포지션이 있으면 손절 매도
             if position.get("has_position"):
                 return TradeAction(
                     action="sell",
@@ -117,7 +119,7 @@ class ScalpingStrategy(BaseStrategy):
             logger.info(f"일일 최대 거래 횟수 도달 ({stats.total_trades}회)")
             return TradeAction(action="hold", reason="일일 최대 거래 횟수 도달")
 
-        # 최소 거래 간격 체크
+        # === 최소 거래 간격 ===
         elapsed = time.time() - self.last_trade_time
         if elapsed < Config.MIN_TRADE_INTERVAL:
             remaining = Config.MIN_TRADE_INTERVAL - elapsed
@@ -128,39 +130,63 @@ class ScalpingStrategy(BaseStrategy):
 
         decision = analysis.get("decision", "hold")
         confidence = analysis.get("confidence", 0.0)
+        confluence = analysis.get("confluence_count", 0)
 
-        # 신뢰도 필터
+        self.last_analysis = analysis
+
+        # === SMC 신뢰도 필터 ===
         if confidence < Config.MIN_CONFIDENCE:
-            logger.info(
-                f"신뢰도 부족: {confidence:.1%} < {Config.MIN_CONFIDENCE:.1%}"
-            )
+            logger.info(f"신뢰도 부족: {confidence:.0%} < {Config.MIN_CONFIDENCE:.0%}")
+            return TradeAction(action="hold", reason=f"신뢰도 부족 ({confidence:.0%})")
+
+        # === 다중 근거 필터 (SMC 핵심 원칙) ===
+        if confluence < Config.MIN_CONFLUENCE and decision != "hold":
+            logger.info(f"근거 부족: {confluence}개 < {Config.MIN_CONFLUENCE}개 필요")
             return TradeAction(
                 action="hold",
-                reason=f"신뢰도 부족 ({confidence:.1%})",
+                reason=f"SMC 근거 부족 ({confluence}개, 최소 {Config.MIN_CONFLUENCE}개 필요)",
             )
 
-        # 매수 신호
+        # === 매수 신호 ===
         if decision == "buy" and not position.get("has_position"):
             self.last_trade_time = time.time()
+            entry = analysis.get("entry_price") or 0
+            target = analysis.get("target_price") or 0
+            stop = analysis.get("stop_loss") or 0
+
+            # 리스크:리워드 체크
+            if entry and target and stop and entry > stop:
+                risk = entry - stop
+                reward = target - entry
+                rr_ratio = reward / risk if risk > 0 else 0
+                if rr_ratio < 1.5:
+                    logger.info(f"R:R 부족: {rr_ratio:.1f} < 1.5")
+                    return TradeAction(
+                        action="hold",
+                        reason=f"리스크:리워드 부족 ({rr_ratio:.1f}:1, 최소 1.5:1 필요)",
+                    )
+                logger.info(f"R:R 비율: {rr_ratio:.1f}:1")
+
+            smc_reason = self._build_smc_reason(analysis)
             return TradeAction(
                 action="buy",
                 amount=Config.TRADE_AMOUNT,
-                reason=analysis.get("reason", "AI 매수 신호"),
-                entry_price=analysis.get("entry_price", 0),
-                target_price=analysis.get("target_price", 0),
-                stop_loss=analysis.get("stop_loss", 0),
+                reason=smc_reason,
+                entry_price=entry,
+                target_price=target,
+                stop_loss=stop,
             )
 
-        # 매도 신호
+        # === 매도 신호 ===
         if decision == "sell" and position.get("has_position"):
             self.last_trade_time = time.time()
             return TradeAction(
                 action="sell",
                 amount=position.get("volume", 0),
-                reason=analysis.get("reason", "AI 매도 신호"),
+                reason=analysis.get("reason", "SMC 매도 신호"),
             )
 
-        # 포지션 보유 중 손절/익절 체크
+        # === 포지션 보유 중: 구조물 기반 손절/익절 ===
         if position.get("has_position"):
             current_price = position.get("current_price", 0)
             avg_price = position.get("avg_price", 0)
@@ -168,27 +194,57 @@ class ScalpingStrategy(BaseStrategy):
             if avg_price > 0 and current_price > 0:
                 pnl_pct = (current_price - avg_price) / avg_price * 100
 
-                # 목표가 도달 시 익절
+                # AI가 제시한 목표가 도달 → 익절
                 target = analysis.get("target_price")
                 if target and current_price >= target:
                     self.last_trade_time = time.time()
                     return TradeAction(
                         action="sell",
                         amount=position.get("volume", 0),
-                        reason=f"목표가 도달 (수익률: {pnl_pct:.2f}%)",
+                        reason=f"SMC 목표가 도달 (수익률: {pnl_pct:+.2f}%)",
                     )
 
-                # 손절가 도달 시 손절
+                # AI가 제시한 손절가 도달 → 손절
                 stop = analysis.get("stop_loss")
                 if stop and current_price <= stop:
                     self.last_trade_time = time.time()
                     return TradeAction(
                         action="sell",
                         amount=position.get("volume", 0),
-                        reason=f"손절가 도달 (손실률: {pnl_pct:.2f}%)",
+                        reason=f"SMC 손절가 도달 (손실률: {pnl_pct:+.2f}%)",
+                    )
+
+                # 반대 구조물 출현 → 익절
+                structures = analysis.get("smc_structures", {})
+                fakeout = structures.get("fakeout_trap", "")
+                if fakeout and "반대" in str(fakeout):
+                    self.last_trade_time = time.time()
+                    return TradeAction(
+                        action="sell",
+                        amount=position.get("volume", 0),
+                        reason=f"반대 구조물 출현 - 포지션 정리 (수익률: {pnl_pct:+.2f}%)",
                     )
 
         return TradeAction(
             action="hold",
             reason=analysis.get("reason", "관망"),
         )
+
+    def _build_smc_reason(self, analysis: dict) -> str:
+        """SMC 구조물 기반 진입 근거 생성"""
+        structures = analysis.get("smc_structures", {})
+        parts = []
+
+        if structures.get("order_blocks"):
+            parts.append(f"OB: {str(structures['order_blocks'])[:40]}")
+        if structures.get("fvg"):
+            parts.append(f"FVG: {str(structures['fvg'])[:40]}")
+        if structures.get("fakeout_trap"):
+            parts.append(f"Fakeout: {str(structures['fakeout_trap'])[:40]}")
+
+        confluence = analysis.get("confluence_count", 0)
+        base_reason = analysis.get("reason", "SMC 매수 신호")
+
+        if parts:
+            return f"[근거 {confluence}개] {' | '.join(parts)} - {base_reason[:60]}"
+        return base_reason
