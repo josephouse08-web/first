@@ -305,7 +305,7 @@ def main():
             for strat_name, strat_factory in STRATEGY_SETS_5M.items():
                 result = run_single_backtest(
                     strat_factory(), candles_5m,
-                    bt_config={"lookback": 500}
+                    bt_config={"lookback": 1000, "max_window": 5000}
                 )
                 all_results_mtf.setdefault(period_key, {})[coin] = result
                 print_result_row(strat_name, result, mkt_ret)
