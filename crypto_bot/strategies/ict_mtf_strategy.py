@@ -4,7 +4,8 @@
 핵심 원칙:
 1. 4h → 시장 구조 & 바이어스 (큰 그림, 주요 S/R)
 2. 1h → POI 탐색 (중요 구간의 OB/FVG만 인정)
-3. 15m → 진입 타이밍 (MSS, 캔들 패턴, 모멘텀)
+3. 15m → 중간 구조 확인
+4. 5m → 진입 타이밍 (MSS, 캔들 패턴, 모멘텀)
 
 쉽알남 법칙 적용:
 - "중요 구간에서 형성된 OB/FVG만 진입" → 4h 레벨 근처의 1h OB/FVG
@@ -12,7 +13,7 @@
 - "리스크 관리 최우선" → 확실한 셋업에서만 진입
 - "큰 타임프레임 확인 필수" → 4h bias가 최우선
 
-입력: 15분봉 캔들 → 내부에서 1h/4h 합성
+입력: 5분봉 캔들 → 내부에서 15m/1h/4h 합성
 """
 
 from datetime import datetime
@@ -29,22 +30,22 @@ class ICTMultiTFStrategy(BaseStrategy):
         super().__init__("ICT 멀티TF", config)
 
     def analyze(self, candles: list[Candle]) -> Optional[Signal]:
-        """15분봉 캔들을 받아서 멀티 TF 분석"""
-        if len(candles) < 300:  # 최소 ~3일치 15m 데이터
+        """5분봉 캔들을 받아서 멀티 TF 분석"""
+        if len(candles) < 500:  # 최소 ~1.7일치 5m 데이터
             return None
 
-        # 성능 최적화: 최근 3000개만 사용 (4h 187개, 1h 750개 생성 가능)
-        # 2년 백테스트에서 O(n²) 방지
-        if len(candles) > 3000:
-            candles = candles[-3000:]
+        # 성능 최적화: 최근 5000개만 사용
+        if len(candles) > 5000:
+            candles = candles[-5000:]
 
         current_price = candles[-1].close
 
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         # 타임프레임 합성
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        candles_1h = self._build_tf(candles, 4)   # 15m × 4 = 1h
-        candles_4h = self._build_tf(candles, 16)  # 15m × 16 = 4h
+        candles_15m = self._build_tf(candles, 3)   # 5m × 3 = 15m
+        candles_1h = self._build_tf(candles, 12)   # 5m × 12 = 1h
+        candles_4h = self._build_tf(candles, 48)   # 5m × 48 = 4h
 
         if len(candles_4h) < 20 or len(candles_1h) < 40:
             return None
@@ -97,10 +98,10 @@ class ICTMultiTFStrategy(BaseStrategy):
             )
 
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # 15m 분석: 진입 확인
+        # 5m 분석: 진입 확인
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        recent_15m = candles[-20:]
-        atr_15m = self._calc_atr(candles[-30:])
+        recent_5m = candles[-20:]
+        atr_5m = self._calc_atr(candles[-30:])
 
         buy_score = 0.0
         sell_score = 0.0
@@ -109,27 +110,27 @@ class ICTMultiTFStrategy(BaseStrategy):
 
         if can_buy and buy_pois:
             buy_score, buy_meta = self._evaluate_entry(
-                recent_15m, current_price, atr_15m, "buy",
+                recent_5m, current_price, atr_5m, "buy",
                 buy_pois, htf_bias, zone, htf_levels
             )
 
         if can_sell and sell_pois:
             sell_score, sell_meta = self._evaluate_entry(
-                recent_15m, current_price, atr_15m, "sell",
+                recent_5m, current_price, atr_5m, "sell",
                 sell_pois, htf_bias, zone, htf_levels
             )
 
         # 4h 레벨 근처 + 트랩이 있으면 POI 없이도 진입 가능
         if can_buy and buy_score < 0.35:
             trap_score, trap_meta = self._check_trap_entry(
-                candles[-30:], current_price, atr_15m, "buy", htf_levels
+                candles[-30:], current_price, atr_5m, "buy", htf_levels
             )
             if trap_score > buy_score:
                 buy_score, buy_meta = trap_score, trap_meta
 
         if can_sell and sell_score < 0.35:
             trap_score, trap_meta = self._check_trap_entry(
-                candles[-30:], current_price, atr_15m, "sell", htf_levels
+                candles[-30:], current_price, atr_5m, "sell", htf_levels
             )
             if trap_score > sell_score:
                 sell_score, sell_meta = trap_score, trap_meta
@@ -377,14 +378,14 @@ class ICTMultiTFStrategy(BaseStrategy):
         return best
 
     # ═══════════════════════════════════════════════════════════
-    # 15m 분석: 진입 확인
+    # 5m 분석: 진입 확인
     # ═══════════════════════════════════════════════════════════
 
-    def _evaluate_entry(self, candles_15m: list[Candle], price: float,
+    def _evaluate_entry(self, candles_5m: list[Candle], price: float,
                          atr: float, direction: str, pois: list[dict],
                          htf_bias: str, zone: str,
                          htf_levels: list[dict]) -> tuple[float, dict]:
-        """15분봉에서 진입 확인"""
+        """5분봉에서 진입 확인"""
         score = 0.0
         reasons = []
         is_buy = direction == "buy"
@@ -422,27 +423,27 @@ class ICTMultiTFStrategy(BaseStrategy):
                     reasons.append(f"{poi['type']}근접(4h레벨)")
                     break
 
-        # (4) 15m MSS (Market Structure Shift)
-        if len(candles_15m) >= 3:
+        # (4) 5m MSS (Market Structure Shift)
+        if len(candles_5m) >= 3:
             if is_buy:
-                if (candles_15m[-2].close < candles_15m[-2].open and
-                    candles_15m[-1].close > candles_15m[-1].open):
+                if (candles_5m[-2].close < candles_5m[-2].open and
+                    candles_5m[-1].close > candles_5m[-1].open):
                     score += 0.06
-                    reasons.append("15m양봉전환")
-                    if candles_15m[-1].close > candles_15m[-2].high:
+                    reasons.append("5m양봉전환")
+                    if candles_5m[-1].close > candles_5m[-2].high:
                         score += 0.04
-                        reasons.append("15mMSS")
+                        reasons.append("5mMSS")
             else:
-                if (candles_15m[-2].close > candles_15m[-2].open and
-                    candles_15m[-1].close < candles_15m[-1].open):
+                if (candles_5m[-2].close > candles_5m[-2].open and
+                    candles_5m[-1].close < candles_5m[-1].open):
                     score += 0.06
-                    reasons.append("15m음봉전환")
-                    if candles_15m[-1].close < candles_15m[-2].low:
+                    reasons.append("5m음봉전환")
+                    if candles_5m[-1].close < candles_5m[-2].low:
                         score += 0.04
-                        reasons.append("15mMSS")
+                        reasons.append("5mMSS")
 
         # (5) 캔들 패턴
-        c = candles_15m[-1]
+        c = candles_5m[-1]
         full_range = c.high - c.low
         if full_range > 0:
             if is_buy:
@@ -457,7 +458,7 @@ class ICTMultiTFStrategy(BaseStrategy):
                     reasons.append("유성형")
 
         # (6) RSI 확인
-        closes = [c.close for c in candles_15m]
+        closes = [c.close for c in candles_5m]
         rsi = self.rsi(closes, 14)
         if rsi:
             if is_buy and rsi[-1] < 40:
@@ -468,16 +469,16 @@ class ICTMultiTFStrategy(BaseStrategy):
                 reasons.append(f"RSI{rsi[-1]:.0f}")
 
         # (7) 모멘텀
-        recent_3 = candles_15m[-3:]
+        recent_3 = candles_5m[-3:]
         if is_buy and sum(1 for c in recent_3 if c.close > c.open) >= 2:
             score += 0.03
         elif not is_buy and sum(1 for c in recent_3 if c.close < c.open) >= 2:
             score += 0.03
 
         # (8) 볼륨 확인
-        if len(candles_15m) >= 10:
-            avg_vol = sum(c.volume for c in candles_15m[-10:]) / 10
-            if avg_vol > 0 and candles_15m[-1].volume > avg_vol * 1.3:
+        if len(candles_5m) >= 10:
+            avg_vol = sum(c.volume for c in candles_5m[-10:]) / 10
+            if avg_vol > 0 and candles_5m[-1].volume > avg_vol * 1.3:
                 score += 0.04
                 reasons.append("볼륨확인")
 

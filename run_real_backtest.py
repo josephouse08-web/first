@@ -2,7 +2,7 @@
 """
 실제 바이낸스 데이터 백테스트 v2
 - 멀티 코인: BTC, ETH, SOL, BNB, XRP, DOGE, ADA
-- 멀티 타임프레임: 15m(진입) → 1h(POI) → 4h(구조) 합성
+- 멀티 타임프레임: 5m(진입) → 15m → 1h(POI) → 4h(구조) 합성
 - ICT 전략 vs 기존 전략 비교
 """
 
@@ -126,8 +126,8 @@ STRATEGY_SETS_1H = {
     "Bollinger (기존)": lambda: [BollingerStrategy()],
 }
 
-# 15m 봉 기반 전략
-STRATEGY_SETS_15M = {
+# 5m 봉 기반 전략
+STRATEGY_SETS_5M = {
     "ICT 멀티TF (쉽알남)": lambda: [ICTMultiTFStrategy()],
 }
 
@@ -164,10 +164,10 @@ def main():
     """)
 
     # ══════════════════════════════════════════════════════════
-    # 1. 데이터 수집 (2년 1h + 3개월 15m)
+    # 1. 데이터 수집 (2년 1h + 2년 5m)
     # ══════════════════════════════════════════════════════════
     print("=" * 130)
-    print("  바이낸스 실제 데이터 수집 중... (7코인 × 2년 1h + 2년 15m)")
+    print("  바이낸스 실제 데이터 수집 중... (7코인 × 2년 1h + 2년 5m)")
     print("=" * 130)
 
     end_time = int(datetime.now().timestamp() * 1000)
@@ -194,15 +194,15 @@ def main():
             print(f"     ❌ {label} 1h 데이터 수집 실패")
             continue
 
-        # 15m 봉 (2년 - MTF 전략용, 강세장 포함)
-        print(f"     📥 15m 봉 수집 중 (2년, ~70,000개)...")
-        candles_15m = fetch_binance_klines(symbol, "15m", start_2y, end_time)
+        # 5m 봉 (2년 - MTF 전략용)
+        print(f"     📥 5m 봉 수집 중 (2년, ~210,000개)...")
+        candles_5m = fetch_binance_klines(symbol, "5m", start_2y, end_time)
 
         start_p = candles_1h[0].open
         end_p = candles_1h[-1].close
         mkt_2y = _calc_market_return(candles_1h)
 
-        print(f"     ✅ 1h: {len(candles_1h)}개 | 15m: {len(candles_15m) if candles_15m else 0}개 (2년)")
+        print(f"     ✅ 1h: {len(candles_1h)}개 | 5m: {len(candles_5m) if candles_5m else 0}개 (2년)")
         print(f"     2년 시장수익률: {mkt_2y:+.1f}% | ${start_p:,.1f} → ${end_p:,.1f}")
 
         # 기간별 슬라이스
@@ -211,10 +211,10 @@ def main():
         c_3m = _filter_candles_after(candles_1h, ts_3m)
         c_1m = _filter_candles_after(candles_1h, ts_1m)
 
-        # 15m 기간별 슬라이스
-        c15_1y = _filter_candles_after(candles_15m, ts_1y) if candles_15m else []
-        c15_6m = _filter_candles_after(candles_15m, ts_6m) if candles_15m else []
-        c15_3m = _filter_candles_after(candles_15m, ts_3m) if candles_15m else []
+        # 5m 기간별 슬라이스
+        c5_1y = _filter_candles_after(candles_5m, ts_1y) if candles_5m else []
+        c5_6m = _filter_candles_after(candles_5m, ts_6m) if candles_5m else []
+        c5_3m = _filter_candles_after(candles_5m, ts_3m) if candles_5m else []
 
         datasets[label] = {
             "1h_2y": candles_1h,
@@ -222,10 +222,10 @@ def main():
             "1h_6m": c_6m,
             "1h_3m": c_3m,
             "1h_1m": c_1m,
-            "15m_2y": candles_15m if candles_15m else [],
-            "15m_1y": c15_1y,
-            "15m_6m": c15_6m,
-            "15m_3m": c15_3m,
+            "5m_2y": candles_5m if candles_5m else [],
+            "5m_1y": c5_1y,
+            "5m_6m": c5_6m,
+            "5m_3m": c5_3m,
         }
 
     if not datasets:
@@ -270,13 +270,13 @@ def main():
                 print_result_row(strat_name, result, mkt_ret)
 
     # ══════════════════════════════════════════════════════════
-    # 3. 15m 멀티TF 전략: 기간별 (2년, 1년, 6개월, 3개월)
+    # 3. 5m 멀티TF 전략: 기간별 (2년, 1년, 6개월, 3개월)
     # ══════════════════════════════════════════════════════════
     MTF_PERIODS = [
-        ("2년", "15m_2y"),
-        ("1년", "15m_1y"),
-        ("6개월", "15m_6m"),
-        ("3개월", "15m_3m"),
+        ("2년", "5m_2y"),
+        ("1년", "5m_1y"),
+        ("6개월", "5m_6m"),
+        ("3개월", "5m_3m"),
     ]
 
     # {period_key: {coin: result}}
@@ -284,28 +284,28 @@ def main():
 
     for period_label, period_key in MTF_PERIODS:
         print(f"\n\n{'='*130}")
-        print(f"  멀티TF 전략 (15m→1h→4h) × 7코인 × {period_label}")
+        print(f"  멀티TF 전략 (5m→15m→1h→4h) × 7코인 × {period_label}")
         print("=" * 130)
 
         for coin, data in datasets.items():
-            candles_15m = data.get(period_key, [])
-            if not candles_15m or len(candles_15m) < 500:
-                print(f"\n  ⏭️  {coin}: 15m 데이터 부족 ({len(candles_15m) if candles_15m else 0}개)")
+            candles_5m = data.get(period_key, [])
+            if not candles_5m or len(candles_5m) < 500:
+                print(f"\n  ⏭️  {coin}: 5m 데이터 부족 ({len(candles_5m) if candles_5m else 0}개)")
                 continue
 
-            mkt_ret = _calc_market_return(candles_15m)
+            mkt_ret = _calc_market_return(candles_5m)
 
             print(f"\n{'─'*130}")
-            print(f"  {coin}/USDT | {period_label} 15m | {len(candles_15m)}캔들 | 시장: {mkt_ret:+.1f}%")
+            print(f"  {coin}/USDT | {period_label} 5m | {len(candles_5m)}캔들 | 시장: {mkt_ret:+.1f}%")
             print(f"{'─'*130}")
             print(f"  {'전략':<30} {'수익률':>7}  {'승/패(승률)':>14}  "
                   f"{'MDD':>5}  {'샤프':>5}  {'PF':>4}  {'롱':>14}  {'숏':>14}  알파")
             print(f"  {'-'*120}")
 
-            for strat_name, strat_factory in STRATEGY_SETS_15M.items():
+            for strat_name, strat_factory in STRATEGY_SETS_5M.items():
                 result = run_single_backtest(
-                    strat_factory(), candles_15m,
-                    bt_config={"lookback": 300}
+                    strat_factory(), candles_5m,
+                    bt_config={"lookback": 500}
                 )
                 all_results_mtf.setdefault(period_key, {})[coin] = result
                 print_result_row(strat_name, result, mkt_ret)
@@ -412,7 +412,7 @@ def main():
     # MTF 기간별 종합
     if all_results_mtf:
         print(f"\n{'█'*130}")
-        print(f"  🏆 멀티TF (쉽알남) 기간별 종합")
+        print(f"  🏆 멀티TF 5m (쉽알남) 기간별 종합")
         print(f"{'█'*130}")
 
         header = f"  {'기간':<12}"

@@ -21,8 +21,8 @@ trading:
   symbols:
     - "BTC/USDT"
     - "ETH/USDT"
-  interval: "1h"           # 캔들 간격: 1m, 5m, 15m, 30m, 1h, 4h, 1d
-  poll_seconds: 60         # 데이터 폴링 간격 (초)
+  interval: "5m"           # 캔들 간격: 1m, 5m, 15m, 30m, 1h, 4h, 1d
+  poll_seconds: 15         # 데이터 폴링 간격 (초)
   initial_balance: 10000   # 초기 자본금 (USDT)
   allow_short: false       # 숏 포지션 허용 여부
   min_strategy_agreement: 0.5  # 전략 동의 비율 (50% 이상 동의 시 실행)
