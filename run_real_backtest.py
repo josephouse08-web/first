@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-실제 바이낸스 데이터 백테스트
-- 공개 API로 BTC/ETH 과거 1시간봉 데이터 수집
+실제 바이낸스 데이터 백테스트 v2
+- 멀티 코인: BTC, ETH, SOL, BNB, XRP, DOGE, ADA
+- 멀티 타임프레임: 15m(진입) → 1h(POI) → 4h(구조) 합성
 - ICT 전략 vs 기존 전략 비교
-- 실제 시장 데이터에서의 성과 검증
 """
 
 import sys
@@ -30,6 +30,7 @@ from crypto_bot.strategies.trendline_channel_strategy import TrendlineChannelStr
 from crypto_bot.strategies.fakeout_strategy import FakeoutStrategy
 from crypto_bot.strategies.ict_combined_strategy import ICTCombinedStrategy
 from crypto_bot.strategies.ict_context_strategy import ICTContextStrategy
+from crypto_bot.strategies.ict_mtf_strategy import ICTMultiTFStrategy
 
 
 def fetch_binance_klines(symbol: str, interval: str, start_time: int,
@@ -54,10 +55,8 @@ def fetch_binance_klines(symbol: str, interval: str, start_time: int,
             except (URLError, Exception) as e:
                 if attempt < 3:
                     wait = 2 ** (attempt + 1)
-                    print(f"    API 재시도 ({attempt + 1}/4), {wait}초 대기... ({e})")
                     time.sleep(wait)
                 else:
-                    print(f"    API 실패: {e}")
                     return all_candles
 
         if not data:
@@ -74,37 +73,27 @@ def fetch_binance_klines(symbol: str, interval: str, start_time: int,
             )
             all_candles.append(candle)
 
-        # 다음 배치
         current_start = int(data[-1][0]) + 1
-
         if len(data) < limit:
             break
-
-        time.sleep(0.2)  # API 레이트 리밋 방지
+        time.sleep(0.2)
 
     return all_candles
 
 
 def run_single_backtest(strategies, candles, risk_config=None, bt_config=None,
                         allow_short=True):
-    """단일 백테스트 실행"""
     default_risk = {
-        "max_risk_per_trade": 0.02,
-        "max_positions": 5,
-        "stop_loss_pct": 0.03,
-        "take_profit_pct": 0.06,
-        "max_daily_loss": 0.50,
-        "max_drawdown": 0.50,
-        "max_daily_trades": 9999,
-        "min_signal_strength": 0.2,
+        "max_risk_per_trade": 0.02, "max_positions": 5,
+        "stop_loss_pct": 0.03, "take_profit_pct": 0.06,
+        "max_daily_loss": 0.50, "max_drawdown": 0.50,
+        "max_daily_trades": 9999, "min_signal_strength": 0.2,
     }
     if risk_config:
         default_risk.update(risk_config)
-
     default_bt = {"initial_balance": 10000, "commission_rate": 0.001, "lookback": 50}
     if bt_config:
         default_bt.update(bt_config)
-
     engine = BacktestEngine(default_bt)
     return engine.run(candles, strategies, default_risk, allow_short=allow_short)
 
@@ -112,38 +101,46 @@ def run_single_backtest(strategies, candles, risk_config=None, bt_config=None,
 def print_result_row(name, r, market_return=None):
     trades = r.total_trades
     if trades == 0:
-        print(f"  {name:<28} {'거래 없음':>10}")
+        print(f"  {name:<30} {'거래없음':>10}")
         return
-    alpha = f" (α: {r.total_return - market_return:+.2f}%)" if market_return is not None else ""
+    alpha = f" (α:{r.total_return - market_return:+.1f}%)" if market_return is not None else ""
     ls = r.long_stats
     ss = r.short_stats
     long_info = f"L:{ls['count']}({ls['pnl_pct']:+.1f}%)" if ls['count'] > 0 else "L:0"
     short_info = f"S:{ss['count']}({ss['pnl_pct']:+.1f}%)" if ss['count'] > 0 else "S:0"
     win_loss = f"{r.winning_trades}W/{r.losing_trades}L"
-    print(f"  {name:<28} {r.total_return:>+8.2f}%  {win_loss:>10}({r.win_rate:.0f}%)  "
-          f"{r.max_drawdown:>6.2f}%  {r.sharpe_ratio:>6.2f}  "
-          f"{r.profit_factor:>5.2f}  {long_info:>16}  {short_info:>16}{alpha}")
+    print(f"  {name:<30} {r.total_return:>+7.1f}%  {win_loss:>10}({r.win_rate:.0f}%)  "
+          f"{r.max_drawdown:>5.1f}%  {r.sharpe_ratio:>5.1f}  "
+          f"{r.profit_factor:>4.1f}  {long_info:>14}  {short_info:>14}{alpha}")
 
 
-# 전략 셋
-STRATEGY_SETS = {
-    # ICT 전략
-    "오더블럭(OB)": lambda: [OrderBlockStrategy()],
-    "FVG": lambda: [FVGStrategy()],
-    "추세선/채널": lambda: [TrendlineChannelStrategy()],
-    "거짓돌파(Fakeout)": lambda: [FakeoutStrategy()],
-    "ICT 종합": lambda: [ICTCombinedStrategy({"min_confluence": 2})],
-    "OB+FVG": lambda: [OrderBlockStrategy(), FVGStrategy()],
+# ══════════════════════════════════════════════════════════
+# 전략 셋 (1h 봉 기반)
+# ══════════════════════════════════════════════════════════
+STRATEGY_SETS_1H = {
     "ICT 올인 (4전략)": lambda: [OrderBlockStrategy(), FVGStrategy(),
                                 TrendlineChannelStrategy(), FakeoutStrategy()],
-    # 신규: 컨텍스트 기반 종합 분석
     "ICT 컨텍스트": lambda: [ICTContextStrategy()],
-    "ICT 컨텍스트+OB": lambda: [ICTContextStrategy(), OrderBlockStrategy()],
-    # 기존 전략 (비교용)
-    "RSI (기존)": lambda: [RSIStrategy()],
-    "MACD (기존)": lambda: [MACDStrategy()],
+    "ICT 종합": lambda: [ICTCombinedStrategy({"min_confluence": 2})],
+    "OB+FVG": lambda: [OrderBlockStrategy(), FVGStrategy()],
     "Bollinger (기존)": lambda: [BollingerStrategy()],
 }
+
+# 15m 봉 기반 전략
+STRATEGY_SETS_15M = {
+    "ICT 멀티TF (쉽알남)": lambda: [ICTMultiTFStrategy()],
+}
+
+# 전체 코인 리스트
+COINS = [
+    ("BTCUSDT", "BTC"),
+    ("ETHUSDT", "ETH"),
+    ("SOLUSDT", "SOL"),
+    ("BNBUSDT", "BNB"),
+    ("XRPUSDT", "XRP"),
+    ("DOGEUSDT", "DOGE"),
+    ("ADAUSDT", "ADA"),
+]
 
 
 def main():
@@ -153,156 +150,233 @@ def main():
  | |   | '__| | | | '_ \| __/ _ \|  _ \ / _ \| __|
  | |___| |  | |_| | |_) | || (_) | |_) | (_) | |_
   \____|_|   \__, | .__/ \__\___/|____/ \___/ \__|
-             |___/|_|    📊 실제 데이터 백테스트 v1.0
+             |___/|_|    📊 백테스트 v2 (멀티TF + 멀티코인)
     """)
 
     # ══════════════════════════════════════════════════════════
-    # 데이터 수집
+    # 1. 데이터 수집
     # ══════════════════════════════════════════════════════════
-    print("=" * 120)
-    print("  바이낸스 실제 데이터 수집 중...")
-    print("=" * 120)
+    print("=" * 130)
+    print("  바이낸스 실제 데이터 수집 중... (7코인 × 2타임프레임)")
+    print("=" * 130)
 
-    # 기간 설정: 최근 6개월 (1시간봉)
     end_time = int(datetime.now().timestamp() * 1000)
-    start_6m = int((datetime.now() - timedelta(days=180)).timestamp() * 1000)
     start_3m = int((datetime.now() - timedelta(days=90)).timestamp() * 1000)
     start_1m = int((datetime.now() - timedelta(days=30)).timestamp() * 1000)
 
     datasets = {}
 
-    for symbol, label in [("BTCUSDT", "BTC/USDT"), ("ETHUSDT", "ETH/USDT")]:
-        print(f"\n  📥 {label} 6개월 1시간봉 데이터 수집 중...")
-        candles = fetch_binance_klines(symbol, "1h", start_6m, end_time)
-        if candles:
-            print(f"     ✅ {len(candles)}개 캔들 수집 완료")
-            print(f"     기간: {candles[0].timestamp.strftime('%Y-%m-%d')} → {candles[-1].timestamp.strftime('%Y-%m-%d')}")
-            start_p = candles[0].open
-            end_p = candles[-1].close
-            market_ret = ((end_p - start_p) / start_p) * 100
-            print(f"     시장수익률: {market_ret:+.2f}% (${start_p:,.0f} → ${end_p:,.0f})")
-            datasets[label] = {
-                "6m": candles,
-                "3m": [c for c in candles if c.timestamp >= datetime.fromtimestamp(start_3m / 1000)],
-                "1m": [c for c in candles if c.timestamp >= datetime.fromtimestamp(start_1m / 1000)],
-                "market_return": market_ret,
-            }
+    for symbol, label in COINS:
+        print(f"\n  📥 {label}/USDT 데이터 수집 중...")
+
+        # 1h 봉 (3개월)
+        candles_1h = fetch_binance_klines(symbol, "1h", start_3m, end_time)
+        if not candles_1h or len(candles_1h) < 100:
+            print(f"     ❌ {label} 1h 데이터 수집 실패")
+            continue
+
+        # 15m 봉 (1개월 - MTF 전략용)
+        candles_15m = fetch_binance_klines(symbol, "15m", start_1m, end_time)
+
+        start_p = candles_1h[0].open
+        end_p = candles_1h[-1].close
+        market_ret_3m = ((end_p - start_p) / start_p) * 100
+
+        candles_1m_period = [c for c in candles_1h if c.timestamp >= datetime.fromtimestamp(start_1m / 1000)]
+        if candles_1m_period:
+            start_p_1m = candles_1m_period[0].open
+            market_ret_1m = ((end_p - start_p_1m) / start_p_1m) * 100
         else:
-            print(f"     ❌ 데이터 수집 실패")
+            market_ret_1m = 0
+
+        print(f"     ✅ 1h: {len(candles_1h)}개 | 15m: {len(candles_15m) if candles_15m else 0}개")
+        print(f"     3개월 시장수익률: {market_ret_3m:+.1f}% | ${start_p:,.1f} → ${end_p:,.1f}")
+
+        datasets[label] = {
+            "1h_3m": candles_1h,
+            "1h_1m": candles_1m_period,
+            "15m_1m": candles_15m if candles_15m else [],
+            "market_ret_3m": market_ret_3m,
+            "market_ret_1m": market_ret_1m,
+        }
 
     if not datasets:
-        print("\n데이터를 가져올 수 없습니다. 네트워크 연결을 확인하세요.")
+        print("\n데이터를 가져올 수 없습니다.")
         return
 
     # ══════════════════════════════════════════════════════════
-    # PART 1: 심볼별 × 기간별 × 전략별 백테스트
+    # 2. 1h 전략 백테스트 (3개월)
     # ══════════════════════════════════════════════════════════
-    all_results = {}
+    print(f"\n\n{'='*130}")
+    print("  PART 1: 1h 전략 비교 (7코인 × 3개월)")
+    print("=" * 130)
 
-    for symbol_label, data in datasets.items():
-        for period_label, period_key in [("6개월", "6m"), ("3개월", "3m"), ("1개월", "1m")]:
-            candles = data[period_key]
-            if len(candles) < 100:
-                continue
+    all_results_1h = {}  # {strat_name: {coin: result}}
 
-            start_p = candles[0].open
-            end_p = candles[-1].close
-            market_ret = ((end_p - start_p) / start_p) * 100
+    for coin, data in datasets.items():
+        candles = data["1h_3m"]
+        if len(candles) < 100:
+            continue
 
-            print(f"\n{'─'*120}")
-            print(f"  {symbol_label} | {period_label} | {len(candles)}캔들 | "
-                  f"시장수익률: {market_ret:+.2f}% | "
-                  f"${start_p:,.0f} → ${end_p:,.0f}")
-            print(f"{'─'*120}")
-            print(f"  {'전략':<28} {'수익률':>8}  {'승/패(승률)':>14}  "
-                  f"{'MDD':>6}  {'샤프':>6}  {'PF':>5}  {'롱(수익률)':>16}  {'숏(수익률)':>16}  알파")
-            print(f"  {'-'*115}")
+        start_p = candles[0].open
+        end_p = candles[-1].close
+        mkt_ret = ((end_p - start_p) / start_p) * 100
 
-            key = f"{symbol_label}_{period_key}"
-            for strat_name, strat_factory in STRATEGY_SETS.items():
-                result = run_single_backtest(strat_factory(), candles)
-                all_results.setdefault(strat_name, {})[key] = result
-                print_result_row(strat_name, result, market_ret)
+        print(f"\n{'─'*130}")
+        print(f"  {coin}/USDT | 3개월 | {len(candles)}캔들 | 시장: {mkt_ret:+.1f}%")
+        print(f"{'─'*130}")
+        print(f"  {'전략':<30} {'수익률':>7}  {'승/패(승률)':>14}  "
+              f"{'MDD':>5}  {'샤프':>5}  {'PF':>4}  {'롱':>14}  {'숏':>14}  알파")
+        print(f"  {'-'*120}")
 
-    # ══════════════════════════════════════════════════════════
-    # PART 2: SL/TP 최적화 (실제 BTC 6개월 데이터)
-    # ══════════════════════════════════════════════════════════
-    if "BTC/USDT" in datasets:
-        btc_candles = datasets["BTC/USDT"]["6m"]
-        print(f"\n\n{'='*120}")
-        print("  PART 2: SL/TP 최적화 (BTC 6개월 실제 데이터)")
-        print("=" * 120)
-
-        # ICT 올인 전략으로 SL/TP 스윕
-        print(f"\n  ── ICT 올인 전략: SL/TP 조합 ──")
-        print(f"  {'SL':>5} {'TP':>5} {'수익률':>9} {'승률':>7} {'거래':>5} {'MDD':>8} {'PF':>8} {'샤프':>8}")
-        print(f"  {'-'*60}")
-
-        best_score = -999
-        best_params = {}
-
-        for sl in [0.015, 0.02, 0.03, 0.04, 0.05, 0.07]:
-            for tp in [0.03, 0.04, 0.06, 0.08, 0.10, 0.15]:
-                if tp <= sl:
-                    continue
-                strats = [OrderBlockStrategy(), FVGStrategy(),
-                          TrendlineChannelStrategy(), FakeoutStrategy()]
-                r = run_single_backtest(
-                    strats, btc_candles,
-                    risk_config={"stop_loss_pct": sl, "take_profit_pct": tp}
-                )
-                if r.total_trades > 0:
-                    score = r.total_return * 0.3 + r.sharpe_ratio * 20 + r.profit_factor * 10 - r.max_drawdown * 0.5
-                    if score > best_score:
-                        best_score = score
-                        best_params = {"sl": sl, "tp": tp, "result": r}
-                    print(f"  {sl*100:>4.1f}% {tp*100:>4.1f}% {r.total_return:>+8.2f}% "
-                          f"{r.win_rate:>6.1f}% {r.total_trades:>5} {r.max_drawdown:>7.2f}% "
-                          f"{r.profit_factor:>7.2f} {r.sharpe_ratio:>7.2f}")
-
-        if best_params:
-            print(f"\n  🏆 최적 SL/TP: SL={best_params['sl']*100:.1f}%, TP={best_params['tp']*100:.1f}%")
+        for strat_name, strat_factory in STRATEGY_SETS_1H.items():
+            result = run_single_backtest(strat_factory(), candles)
+            all_results_1h.setdefault(strat_name, {})[coin] = result
+            print_result_row(strat_name, result, mkt_ret)
 
     # ══════════════════════════════════════════════════════════
-    # 최종 종합 리포트
+    # 3. 15m 멀티TF 전략 백테스트 (1개월)
     # ══════════════════════════════════════════════════════════
-    print(f"\n\n{'█'*120}")
-    print(f"  🏆 최종 종합 리포트 (실제 바이낸스 데이터)")
-    print(f"{'█'*120}")
+    print(f"\n\n{'='*130}")
+    print("  PART 2: 멀티TF 전략 (15m→1h→4h 합성) × 7코인 × 1개월")
+    print("=" * 130)
 
-    print(f"\n  {'전략':<28}", end="")
-    data_keys = []
-    for symbol_label in datasets:
-        for period_key in ["6m", "3m", "1m"]:
-            key = f"{symbol_label}_{period_key}"
-            if any(key in v for v in all_results.values()):
-                data_keys.append(key)
-                short = f"{symbol_label[:3]}_{period_key}"
-                print(f" {short:>10}", end="")
-    print(f"  {'평균':>8}  {'승률평균':>8}")
-    print(f"  {'-'*120}")
+    all_results_mtf = {}  # {coin: result}
 
-    for strat_name in STRATEGY_SETS:
-        print(f"  {strat_name:<28}", end="")
+    # 비교용: 1h 전략도 1개월로 다시 측정
+    all_results_1h_1m = {}
+
+    for coin, data in datasets.items():
+        candles_15m = data["15m_1m"]
+        candles_1h = data["1h_1m"]
+
+        if not candles_15m or len(candles_15m) < 300:
+            print(f"\n  ⏭️  {coin}: 15m 데이터 부족 ({len(candles_15m) if candles_15m else 0}개)")
+            continue
+
+        mkt_ret = data["market_ret_1m"]
+        start_p = candles_15m[0].open
+        end_p = candles_15m[-1].close
+
+        print(f"\n{'─'*130}")
+        print(f"  {coin}/USDT | 1개월 | 15m:{len(candles_15m)}캔들 / 1h:{len(candles_1h)}캔들 | 시장: {mkt_ret:+.1f}%")
+        print(f"{'─'*130}")
+        print(f"  {'전략':<30} {'수익률':>7}  {'승/패(승률)':>14}  "
+              f"{'MDD':>5}  {'샤프':>5}  {'PF':>4}  {'롱':>14}  {'숏':>14}  알파")
+        print(f"  {'-'*120}")
+
+        # 멀티TF 전략 (15m 기반)
+        for strat_name, strat_factory in STRATEGY_SETS_15M.items():
+            result = run_single_backtest(
+                strat_factory(), candles_15m,
+                bt_config={"lookback": 200}
+            )
+            all_results_mtf[coin] = result
+            print_result_row(strat_name, result, mkt_ret)
+
+        # 1h 전략 비교 (같은 1개월)
+        if len(candles_1h) >= 100:
+            for strat_name in ["ICT 올인 (4전략)", "ICT 컨텍스트"]:
+                strat_factory = STRATEGY_SETS_1H[strat_name]
+                result = run_single_backtest(strat_factory(), candles_1h)
+                all_results_1h_1m.setdefault(strat_name, {})[coin] = result
+                print_result_row(f"  ↳ {strat_name} (1h비교)", result, mkt_ret)
+
+    # ══════════════════════════════════════════════════════════
+    # 4. 종합 리포트
+    # ══════════════════════════════════════════════════════════
+    print(f"\n\n{'█'*130}")
+    print(f"  🏆 종합 리포트: 1h 전략 × 7코인 (3개월)")
+    print(f"{'█'*130}")
+
+    coins_list = [c for c in datasets]
+    header = f"  {'전략':<30}"
+    for coin in coins_list:
+        header += f" {coin:>8}"
+    header += f"  {'평균':>7}  {'승률':>5}"
+    print(header)
+    print(f"  {'-'*130}")
+
+    for strat_name in STRATEGY_SETS_1H:
+        row = f"  {strat_name:<30}"
         returns = []
         win_rates = []
-        for key in data_keys:
-            r = all_results.get(strat_name, {}).get(key)
+        for coin in coins_list:
+            r = all_results_1h.get(strat_name, {}).get(coin)
             if r and r.total_trades > 0:
                 returns.append(r.total_return)
                 win_rates.append(r.win_rate)
-                print(f"  {r.total_return:>+8.1f}%", end="")
+                row += f" {r.total_return:>+7.1f}%"
             else:
-                print(f"  {'N/A':>9}", end="")
-
+                row += f" {'N/A':>8}"
         if returns:
-            avg_ret = mean(returns)
-            avg_wr = mean(win_rates)
-            print(f"  {avg_ret:>+7.1f}%  {avg_wr:>6.1f}%")
-        else:
-            print(f"  {'N/A':>8}  {'N/A':>8}")
+            row += f"  {mean(returns):>+6.1f}%  {mean(win_rates):>4.0f}%"
+        print(row)
 
-    print(f"\n  총 백테스트 실행 횟수: {len(data_keys) * len(STRATEGY_SETS)} + SL/TP 최적화")
+    # 멀티TF 종합
+    print(f"\n{'█'*130}")
+    print(f"  🏆 멀티TF vs 1h 비교 (1개월)")
+    print(f"{'█'*130}")
+
+    header = f"  {'전략':<30}"
+    for coin in coins_list:
+        header += f" {coin:>8}"
+    header += f"  {'평균':>7}  {'승률':>5}"
+    print(header)
+    print(f"  {'-'*130}")
+
+    # MTF 결과
+    row = f"  {'ICT 멀티TF (쉽알남)':<30}"
+    mtf_returns = []
+    mtf_wrs = []
+    for coin in coins_list:
+        r = all_results_mtf.get(coin)
+        if r and r.total_trades > 0:
+            mtf_returns.append(r.total_return)
+            mtf_wrs.append(r.win_rate)
+            row += f" {r.total_return:>+7.1f}%"
+        else:
+            row += f" {'N/A':>8}"
+    if mtf_returns:
+        row += f"  {mean(mtf_returns):>+6.1f}%  {mean(mtf_wrs):>4.0f}%"
+    print(row)
+
+    # 1h 비교
+    for strat_name in ["ICT 올인 (4전략)", "ICT 컨텍스트"]:
+        row = f"  {strat_name:<30}"
+        returns = []
+        wrs = []
+        for coin in coins_list:
+            r = all_results_1h_1m.get(strat_name, {}).get(coin)
+            if r and r.total_trades > 0:
+                returns.append(r.total_return)
+                wrs.append(r.win_rate)
+                row += f" {r.total_return:>+7.1f}%"
+            else:
+                row += f" {'N/A':>8}"
+        if returns:
+            row += f"  {mean(returns):>+6.1f}%  {mean(wrs):>4.0f}%"
+        print(row)
+
+    # 시장 수익률
+    row = f"  {'📊 시장 수익률':<30}"
+    for coin in coins_list:
+        mkt = datasets[coin]["market_ret_1m"]
+        row += f" {mkt:>+7.1f}%"
+    all_mkt = [datasets[c]["market_ret_1m"] for c in coins_list]
+    row += f"  {mean(all_mkt):>+6.1f}%"
+    print(row)
+
+    # 거래 횟수 비교
+    print(f"\n  📊 거래 횟수 비교 (1개월):")
+    for coin in coins_list:
+        r_mtf = all_results_mtf.get(coin)
+        r_1h = all_results_1h_1m.get("ICT 올인 (4전략)", {}).get(coin)
+        mtf_t = r_mtf.total_trades if r_mtf else 0
+        h1_t = r_1h.total_trades if r_1h else 0
+        print(f"     {coin}: 멀티TF={mtf_t}회 | ICT올인(1h)={h1_t}회")
+
+    print(f"\n  총 코인: {len(datasets)}개 | 전략: {len(STRATEGY_SETS_1H) + len(STRATEGY_SETS_15M)}개")
     print()
 
 
