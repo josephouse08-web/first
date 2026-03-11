@@ -67,6 +67,11 @@ class BacktestResult:
 class SMCBacktester:
     """SMC 전략 백테스터"""
 
+    # 트레일링 스탑 설정
+    TRAILING_ACTIVATE_PCT = 0.5   # 목표가까지 50% 도달 시 트레일링 활성화
+    TRAILING_STEP_PCT = 0.3       # 수익의 30% 지점에 손절선 이동 (70% 수익 보호)
+    CONSECUTIVE_LOSS_COOLDOWN = 2  # N연패 후 1사이클 쿨다운
+
     def __init__(self, coin: str = None, initial_balance: float = 1_000_000):
         self.coin = coin or Config.COIN
         self.initial_balance = initial_balance
@@ -74,9 +79,11 @@ class SMCBacktester:
         self.analyzer = AIAnalyzer()
         self.trades: list[BacktestTrade] = []
         self.trade_counter = 0
-        self.position = None  # {"direction", "entry_price", "target", "stop_loss", "entry_time"}
+        self.position = None
         self.balance_history = [initial_balance]
         self.api_call_delay = 3  # Claude API 호출 간격 (초)
+        self.consecutive_losses = 0  # 연속 손실 카운터
+        self.cooldown_remaining = 0  # 쿨다운 남은 사이클
 
     def run(self, days_back: int = 7, analysis_interval_candles: int = 10) -> BacktestResult:
         """백테스트 실행
@@ -164,7 +171,11 @@ class SMCBacktester:
 
             # 포지션 없을 때만 신규 진입 판단
             if not self.position:
-                self._evaluate_entry(analysis, current_price, current_time)
+                if self.cooldown_remaining > 0:
+                    self.cooldown_remaining -= 1
+                    logger.info(f"  → 쿨다운 중 ({self.cooldown_remaining}사이클 남음)")
+                else:
+                    self._evaluate_entry(analysis, current_price, current_time)
 
             # API 속도 제한
             time.sleep(self.api_call_delay)
@@ -308,13 +319,15 @@ class SMCBacktester:
         # 진입
         self.position = {
             "direction": direction,
-            "entry_price": price,  # 현재가로 진입 (시장가 시뮬레이션)
+            "entry_price": price,
             "target_price": target_price,
             "stop_loss": stop_loss,
             "entry_time": timestamp,
             "confidence": confidence,
             "confluence": confluence,
             "reason": analysis.get("reason", ""),
+            "best_price": price,         # 트레일링용 최고/최저가
+            "trailing_active": False,    # 트레일링 활성화 여부
         }
 
         logger.info(
@@ -353,23 +366,88 @@ class SMCBacktester:
         return None
 
     def _check_position_exit(self, current_price: float, current_time) -> str:
-        """포지션 손절/익절 체크"""
+        """포지션 손절/익절 + 트레일링 스탑 체크"""
         if not self.position:
             return ""
 
         direction = self.position["direction"]
+        entry = self.position["entry_price"]
         target = self.position.get("target_price")
         stop = self.position.get("stop_loss")
+        trailing_active = self.position.get("trailing_active", False)
+        best_price = self.position.get("best_price", entry)
 
         if direction == "long":
+            # 최고가 갱신
+            if current_price > best_price:
+                best_price = current_price
+                self.position["best_price"] = best_price
+
+            # 트레일링 활성화 체크: 목표가까지 50% 도달
+            if not trailing_active and target:
+                activate_price = entry + (target - entry) * self.TRAILING_ACTIVATE_PCT
+                if current_price >= activate_price:
+                    trailing_active = True
+                    self.position["trailing_active"] = True
+                    # 손절선을 진입가로 이동 (본전 보장)
+                    self.position["stop_loss"] = entry
+                    stop = entry
+                    logger.info(
+                        f"  ↑ 트레일링 활성화 @ {current_price:,.0f}원 "
+                        f"(손절 → {stop:,.0f}원 본전)"
+                    )
+
+            # 트레일링 중: 최고가 기준으로 손절선 끌어올림
+            if trailing_active:
+                profit_from_entry = best_price - entry
+                new_stop = entry + profit_from_entry * (1 - self.TRAILING_STEP_PCT)
+                if new_stop > stop:
+                    self.position["stop_loss"] = new_stop
+                    stop = new_stop
+
+            # 완전 익절 (목표가 도달)
             if target and current_price >= target:
                 return "목표가 도달 (익절)"
+            # 손절 (트레일링 포함)
             if stop and current_price <= stop:
+                if trailing_active:
+                    return f"트레일링 스탑 (수익 확보)"
                 return "손절가 도달 (손절)"
+
         elif direction == "short":
+            # 최저가 갱신
+            if current_price < best_price:
+                best_price = current_price
+                self.position["best_price"] = best_price
+
+            # 트레일링 활성화 체크
+            if not trailing_active and target:
+                activate_price = entry - (entry - target) * self.TRAILING_ACTIVATE_PCT
+                if current_price <= activate_price:
+                    trailing_active = True
+                    self.position["trailing_active"] = True
+                    self.position["stop_loss"] = entry
+                    stop = entry
+                    logger.info(
+                        f"  ↓ 트레일링 활성화 @ {current_price:,.0f}원 "
+                        f"(손절 → {stop:,.0f}원 본전)"
+                    )
+
+            # 트레일링 중: 최저가 기준으로 손절선 끌어내림
+            if trailing_active:
+                profit_from_entry = entry - best_price
+                new_stop = entry - profit_from_entry * (1 - self.TRAILING_STEP_PCT)
+                if new_stop < stop:
+                    self.position["stop_loss"] = new_stop
+                    stop = new_stop
+
+            # 완전 익절
             if target and current_price <= target:
                 return "목표가 도달 (익절)"
+            # 손절
             if stop and current_price >= stop:
+                if trailing_active:
+                    return f"트레일링 스탑 (수익 확보)"
                 return "손절가 도달 (손절)"
 
         return ""
@@ -415,11 +493,21 @@ class SMCBacktester:
         )
         self.trades.append(trade)
 
+        # 연속 손실 추적 & 쿨다운
+        if pnl_pct <= 0:
+            self.consecutive_losses += 1
+            if self.consecutive_losses >= self.CONSECUTIVE_LOSS_COOLDOWN:
+                self.cooldown_remaining = 1  # 1사이클 쉼
+                logger.info(f"  ⚠ {self.consecutive_losses}연패 → 1사이클 쿨다운")
+        else:
+            self.consecutive_losses = 0
+
+        trailing_tag = " [트레일링]" if self.position.get("trailing_active") else ""
         emoji = "+" if pnl_pct > 0 else ""
         logger.info(
             f"  ■ {direction.upper()} 청산 @ {exit_price:,.0f}원 "
             f"({emoji}{pnl_pct:.2f}%, {emoji}{pnl_krw:,.0f}원) "
-            f"- {reason}"
+            f"- {reason}{trailing_tag}"
         )
         logger.info(f"  잔고: {self.balance:,.0f}원")
 
