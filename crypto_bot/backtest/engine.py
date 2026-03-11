@@ -191,8 +191,12 @@ class BacktestEngine:
 
         logger.info(f"백테스트 시작 | 캔들: {len(candles)} | 전략: {[s.name for s in strategies]} | 숏 허용: {allow_short}")
 
+        # 윈도우 최대 크기 (O(n²) 방지 - 2년 백테스트 최적화)
+        max_window = self.config.get("max_window", 500)
+
         for i in range(lookback, len(candles)):
-            window = candles[:i + 1]
+            window_start = max(0, i + 1 - max_window)
+            window = candles[window_start:i + 1]
             current_candle = candles[i]
             current_price = current_candle.close
 

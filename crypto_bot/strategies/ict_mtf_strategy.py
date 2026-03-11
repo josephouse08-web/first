@@ -33,6 +33,11 @@ class ICTMultiTFStrategy(BaseStrategy):
         if len(candles) < 300:  # 최소 ~3일치 15m 데이터
             return None
 
+        # 성능 최적화: 최근 3000개만 사용 (4h 187개, 1h 750개 생성 가능)
+        # 2년 백테스트에서 O(n²) 방지
+        if len(candles) > 3000:
+            candles = candles[-3000:]
+
         current_price = candles[-1].close
 
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
