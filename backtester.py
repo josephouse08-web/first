@@ -68,10 +68,13 @@ class SMCBacktester:
     """SMC 전략 백테스터"""
 
     # 트레일링 스탑 설정
-    TRAILING_ACTIVATE_PCT = 0.5   # 목표가까지 50% 도달 시 트레일링 활성화
-    TRAILING_STEP_PCT = 0.3       # 수익의 30% 지점에 손절선 이동 (70% 수익 보호)
+    TRAILING_ACTIVATE_PCT = 0.4   # 목표가까지 40% 도달 시 트레일링 활성화
+    TRAILING_STEP_PCT = 0.25      # 수익의 25% 지점에 손절선 이동 (75% 수익 보호)
     CONSECUTIVE_LOSS_COOLDOWN = 2  # N연패 후 1사이클 쿨다운
-    MAX_STOP_LOSS_PCT = 3.0       # 1건당 최대 손절폭 % (레버리지 적용 전 기준)
+    MAX_STOP_LOSS_PCT = 1.5       # 1건당 최대 손절폭 % (레버리지 적용 전 기준)
+    MIN_RR_RATIO = 2.0            # 최소 R:R 비율
+    TREND_EMA_SHORT = 10          # 단기 EMA (추세 판단용)
+    TREND_EMA_LONG = 30           # 장기 EMA (추세 판단용)
 
     def __init__(self, coin: str = None, initial_balance: float = 1_000_000,
                  leverage: int = 1):
@@ -174,12 +177,19 @@ class SMCBacktester:
             if not chart_image:
                 continue
 
+            # 추세 컨텍스트 계산
+            trend_context = self._calc_trend_context(all_data, current_idx)
+            ema_trend = self._get_ema_trend(all_data, current_idx)
+
             # Claude Vision SMC 분석
             context = (
                 f"현재가: {current_price:,.0f}원, 코인: {self.coin}, "
                 f"시각: {current_time.strftime('%Y-%m-%d %H:%M')}, "
                 f"타임프레임: {', '.join(tf_data.keys())}, "
-                f"모드: {mode} {self.leverage}x 레버리지, 롱/숏 모두 가능"
+                f"모드: {mode} {self.leverage}x 레버리지, 롱/숏 모두 가능\n"
+                f"{trend_context}\n"
+                f"★ 중요: 추세 방향과 일치하는 매매만 하세요. "
+                f"손절은 현재가 대비 0.3~1.5% 이내로 타이트하게 설정하세요."
             )
 
             try:
@@ -205,7 +215,7 @@ class SMCBacktester:
                     self.cooldown_remaining -= 1
                     logger.info(f"  → 쿨다운 중 ({self.cooldown_remaining}사이클 남음)")
                 else:
-                    self._evaluate_entry(analysis, current_price, current_time)
+                    self._evaluate_entry(analysis, current_price, current_time, ema_trend)
 
             # API 속도 제한
             time.sleep(self.api_call_delay)
@@ -286,6 +296,92 @@ class SMCBacktester:
 
         return tf_data
 
+    def _calc_trend_context(self, all_data: pd.DataFrame, current_idx: int) -> str:
+        """EMA 기반 추세 컨텍스트 계산 (AI에 참고 정보로 전달)"""
+        # 5분봉 데이터에서 EMA 계산
+        lookback = max(self.TREND_EMA_LONG * 3, 200)
+        start = max(0, current_idx - lookback)
+        df = all_data.iloc[start:current_idx + 1].copy()
+
+        if len(df) < self.TREND_EMA_LONG:
+            return "추세 데이터 부족"
+
+        close = df["close"]
+        ema_short = close.ewm(span=self.TREND_EMA_SHORT, adjust=False).mean()
+        ema_long = close.ewm(span=self.TREND_EMA_LONG, adjust=False).mean()
+
+        current_price = close.iloc[-1]
+        ema_s = ema_short.iloc[-1]
+        ema_l = ema_long.iloc[-1]
+
+        # 5분봉 추세
+        if ema_s > ema_l and current_price > ema_s:
+            trend_5m = "상승"
+        elif ema_s < ema_l and current_price < ema_s:
+            trend_5m = "하락"
+        else:
+            trend_5m = "횡보"
+
+        # 1시간봉 추세 (리샘플링)
+        df_1h = self._resample(df, "1h")
+        if len(df_1h) >= self.TREND_EMA_LONG:
+            close_1h = df_1h["close"]
+            ema_s_1h = close_1h.ewm(span=self.TREND_EMA_SHORT, adjust=False).mean()
+            ema_l_1h = close_1h.ewm(span=self.TREND_EMA_LONG, adjust=False).mean()
+            price_1h = close_1h.iloc[-1]
+            if ema_s_1h.iloc[-1] > ema_l_1h.iloc[-1] and price_1h > ema_s_1h.iloc[-1]:
+                trend_1h = "상승"
+            elif ema_s_1h.iloc[-1] < ema_l_1h.iloc[-1] and price_1h < ema_s_1h.iloc[-1]:
+                trend_1h = "하락"
+            else:
+                trend_1h = "횡보"
+        else:
+            trend_1h = "판단불가"
+
+        # 최근 가격 변화율
+        if len(close) >= 12:
+            change_1h = (current_price / close.iloc[-12] - 1) * 100
+        else:
+            change_1h = 0
+        if len(close) >= 36:
+            change_3h = (current_price / close.iloc[-36] - 1) * 100
+        else:
+            change_3h = 0
+
+        return (
+            f"[EMA 추세 참고] 5분봉: {trend_5m}, 1시간봉: {trend_1h} | "
+            f"EMA{self.TREND_EMA_SHORT}: {ema_s:,.0f}, EMA{self.TREND_EMA_LONG}: {ema_l:,.0f} | "
+            f"최근1시간 변동: {change_1h:+.2f}%, 최근3시간 변동: {change_3h:+.2f}%"
+        )
+
+    def _get_ema_trend(self, all_data: pd.DataFrame, current_idx: int) -> str:
+        """30분봉 EMA 기반 추세 방향 반환 (안정적인 trend filter)"""
+        lookback = max(self.TREND_EMA_LONG * 18, 400)  # 30분봉으로 충분한 데이터
+        start = max(0, current_idx - lookback)
+        df = all_data.iloc[start:current_idx + 1]
+
+        # 30분봉으로 리샘플링하여 노이즈 제거
+        df_30m = self._resample(df, "30min")
+        if len(df_30m) < self.TREND_EMA_LONG:
+            return "sideways"
+
+        close = df_30m["close"]
+        ema_short = close.ewm(span=self.TREND_EMA_SHORT, adjust=False).mean()
+        ema_long = close.ewm(span=self.TREND_EMA_LONG, adjust=False).mean()
+        price = close.iloc[-1]
+
+        ema_s = ema_short.iloc[-1]
+        ema_l = ema_long.iloc[-1]
+
+        # EMA 간격이 충분해야 추세로 인정
+        ema_gap_pct = abs(ema_s - ema_l) / ema_l * 100
+
+        if ema_s > ema_l and price > ema_l and ema_gap_pct > 0.03:
+            return "uptrend"
+        elif ema_s < ema_l and price < ema_l and ema_gap_pct > 0.03:
+            return "downtrend"
+        return "sideways"
+
     def _resample(self, df: pd.DataFrame, freq: str) -> pd.DataFrame:
         """OHLCV 리샘플링"""
         resampled = df.resample(freq).agg({
@@ -297,13 +393,39 @@ class SMCBacktester:
         }).dropna()
         return resampled
 
-    def _evaluate_entry(self, analysis: dict, price: float, timestamp):
+    def _evaluate_entry(self, analysis: dict, price: float, timestamp,
+                         ema_trend: str = "sideways"):
         """신규 진입 평가"""
         decision = analysis.get("decision", "hold")
         confidence = analysis.get("confidence", 0.0)
         confluence = analysis.get("confluence_count", 0)
 
         if decision == "hold":
+            return
+
+        # ★ 추세 필터: EMA 추세와 반대 방향 진입 차단
+        ai_trend = analysis.get("trend", "sideways")
+        if decision == "buy" and ema_trend == "downtrend":
+            logger.info(f"  → 패스 (추세 필터: EMA 하락 추세에서 롱 차단)")
+            return
+        if decision == "sell" and ema_trend == "uptrend":
+            logger.info(f"  → 패스 (추세 필터: EMA 상승 추세에서 숏 차단)")
+            return
+        if ema_trend == "sideways":
+            # 횡보 시 신뢰도 기준 강화
+            if confidence < 0.80:
+                logger.info(f"  → 패스 (횡보 구간: 신뢰도 {confidence:.0%} < 80% 필요)")
+                return
+
+        # ★ AI 추세 판단과 진입 방향 교차 검증
+        if decision == "buy" and ai_trend == "downtrend":
+            logger.info(f"  → 패스 (AI 추세 교차검증: AI가 하락 추세 판단했으나 롱 추천)")
+            return
+        if decision == "sell" and ai_trend == "uptrend":
+            logger.info(f"  → 패스 (AI 추세 교차검증: AI가 상승 추세 판단했으나 숏 추천)")
+            return
+        if ai_trend == "sideways":
+            logger.info(f"  → 패스 (AI가 횡보 추세 판단 — 진입 안함)")
             return
 
         # SMC 필터: 신뢰도 + 다중 근거
@@ -369,8 +491,8 @@ class SMCBacktester:
 
             if risk > 0:
                 rr = reward / risk
-                if rr < 1.5:
-                    logger.info(f"  → 패스 (R:R {rr:.1f}:1 < 1.5:1)")
+                if rr < self.MIN_RR_RATIO:
+                    logger.info(f"  → 패스 (R:R {rr:.1f}:1 < {self.MIN_RR_RATIO:.1f}:1)")
                     return
                 logger.info(f"  R:R 비율: {rr:.1f}:1")
 
