@@ -1,7 +1,7 @@
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from config import Config
 from logger_setup import setup_logger
 
@@ -73,6 +73,8 @@ class SMCScalpingStrategy(BaseStrategy):
         self.last_trade_time = 0.0
         self.daily_stats = DailyStats()
         self.last_analysis = {}
+        self.consecutive_losses = 0
+        self.loss_cooldown_until = 0.0
 
     def reset_daily(self, starting_balance: float):
         today = date.today().isoformat()
@@ -91,8 +93,16 @@ class SMCScalpingStrategy(BaseStrategy):
         self.daily_stats.total_trades += 1
         if is_profit:
             self.daily_stats.winning_trades += 1
+            self.consecutive_losses = 0
         else:
             self.daily_stats.losing_trades += 1
+            self.consecutive_losses += 1
+            if self.consecutive_losses >= Config.CONSECUTIVE_LOSS_LIMIT:
+                self.loss_cooldown_until = time.time() + Config.CONSECUTIVE_LOSS_COOLDOWN
+                logger.warning(
+                    f"연속 {self.consecutive_losses}패 → "
+                    f"{Config.CONSECUTIVE_LOSS_COOLDOWN}초 쿨다운 발동"
+                )
 
     def evaluate(self, analysis: dict, daily_stats: DailyStats = None,
                  current_position: dict = None) -> TradeAction:
@@ -119,8 +129,23 @@ class SMCScalpingStrategy(BaseStrategy):
             logger.info(f"일일 최대 거래 횟수 도달 ({stats.total_trades}회)")
             return TradeAction(action="hold", reason="일일 최대 거래 횟수 도달")
 
+        # === 연패 쿨다운 ===
+        now = time.time()
+        if now < self.loss_cooldown_until:
+            remaining = self.loss_cooldown_until - now
+            logger.info(
+                f"연패 쿨다운 중: {remaining:.0f}초 남음 "
+                f"(연속 {self.consecutive_losses}패)"
+            )
+            # 쿨다운 중에도 보유 포지션 손절/익절은 허용 (아래 포지션 관리로 진행)
+            if not position.get("has_position"):
+                return TradeAction(
+                    action="hold",
+                    reason=f"연패 쿨다운 ({remaining:.0f}초 남음, {self.consecutive_losses}연패)",
+                )
+
         # === 최소 거래 간격 ===
-        elapsed = time.time() - self.last_trade_time
+        elapsed = now - self.last_trade_time
         if elapsed < Config.MIN_TRADE_INTERVAL:
             remaining = Config.MIN_TRADE_INTERVAL - elapsed
             return TradeAction(
@@ -190,6 +215,29 @@ class SMCScalpingStrategy(BaseStrategy):
         if position.get("has_position"):
             current_price = position.get("current_price", 0)
             avg_price = position.get("avg_price", 0)
+
+            # === 최대 보유 시간 초과 → 강제 청산 ===
+            entry_time_str = position.get("entry_time")
+            if entry_time_str and Config.MAX_HOLD_MINUTES > 0:
+                try:
+                    entry_dt = datetime.fromisoformat(entry_time_str)
+                    hold_minutes = (datetime.now() - entry_dt).total_seconds() / 60
+                    if hold_minutes >= Config.MAX_HOLD_MINUTES:
+                        pnl_pct = 0.0
+                        if avg_price > 0 and current_price > 0:
+                            pnl_pct = (current_price - avg_price) / avg_price * 100
+                        self.last_trade_time = time.time()
+                        logger.warning(
+                            f"최대 보유 시간 초과: {hold_minutes:.0f}분 "
+                            f"(한도: {Config.MAX_HOLD_MINUTES}분)"
+                        )
+                        return TradeAction(
+                            action="sell",
+                            amount=position.get("volume", 0),
+                            reason=f"최대 보유 시간 초과 ({hold_minutes:.0f}분, 수익률: {pnl_pct:+.2f}%)",
+                        )
+                except (ValueError, TypeError):
+                    pass
 
             if avg_price > 0 and current_price > 0:
                 pnl_pct = (current_price - avg_price) / avg_price * 100
