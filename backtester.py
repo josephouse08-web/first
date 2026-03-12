@@ -768,7 +768,7 @@ class SMCBacktester:
         fee_total = self.fee_pct * 2 * self.leverage
         pnl_pct -= fee_total
 
-        trade_amount = min(Config.TRADE_AMOUNT, self.balance)
+        trade_amount = self.balance  # 자본금 전액 투자
         pnl_krw = trade_amount * (pnl_pct / 100)
         self.balance += pnl_krw
         self.balance_history.append(self.balance)
