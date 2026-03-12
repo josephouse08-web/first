@@ -551,6 +551,21 @@ class SMCBacktester:
         if not self.position:
             return ""
 
+        # 최대 보유 시간 체크
+        entry_time = self.position.get("entry_time")
+        if entry_time and Config.MAX_HOLD_MINUTES > 0:
+            try:
+                if hasattr(entry_time, 'timestamp'):
+                    hold_minutes = (current_time - entry_time).total_seconds() / 60
+                else:
+                    from datetime import datetime as dt
+                    entry_dt = dt.fromisoformat(str(entry_time))
+                    hold_minutes = (current_time - entry_dt).total_seconds() / 60
+                if hold_minutes >= Config.MAX_HOLD_MINUTES:
+                    return f"최대 보유 시간 초과 ({hold_minutes:.0f}분)"
+            except (ValueError, TypeError):
+                pass
+
         direction = self.position["direction"]
         entry = self.position["entry_price"]
         target = self.position.get("target_price")
