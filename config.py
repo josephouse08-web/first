@@ -9,12 +9,9 @@ class Config:
     UPBIT_ACCESS_KEY = os.getenv("UPBIT_ACCESS_KEY", "")
     UPBIT_SECRET_KEY = os.getenv("UPBIT_SECRET_KEY", "")
 
-    # Anthropic API (레거시)
+    # Anthropic API
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-
-    # Gemini API
-    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-    GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
+    CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
 
     # Trading Settings
     COIN = os.getenv("COIN", "KRW-BTC")
@@ -37,5 +34,3 @@ class Config:
     CONSECUTIVE_LOSS_LIMIT = 3  # 연패 쿨다운 발동 기준
     CONSECUTIVE_LOSS_COOLDOWN = 300  # 연패 시 쿨다운 (초) - 5분
 
-    # Claude model
-    CLAUDE_MODEL = "claude-sonnet-4-20250514"
