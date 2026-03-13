@@ -72,7 +72,7 @@ class SMCBacktester:
     TRAILING_STEP_PCT = 0.25      # 수익의 25% 지점에 손절선 이동 (75% 수익 보호)
     CONSECUTIVE_LOSS_COOLDOWN = 2  # N연패 후 1사이클 쿨다운
     MAX_STOP_LOSS_PCT = 1.5       # 1건당 최대 손절폭 % (레버리지 적용 전 기준)
-    MIN_RR_RATIO = 2.0            # 최소 R:R 비율
+    MIN_RR_RATIO = 1.5            # 최소 R:R 비율
     TREND_EMA_SHORT = 10          # 단기 EMA (추세 판단용)
     TREND_EMA_LONG = 30           # 장기 EMA (추세 판단용)
 
