@@ -1,6 +1,7 @@
 import json
 import base64
-import anthropic
+from google import genai
+from google.genai import types
 from config import Config
 from logger_setup import setup_logger
 
@@ -100,54 +101,42 @@ SMC_SYSTEM_PROMPT = """당신은 SMC(Smart Money Concepts) 기반 암호화폐 �
 
 class AIAnalyzer:
     def __init__(self):
-        self.client = anthropic.Anthropic(api_key=Config.ANTHROPIC_API_KEY)
-        logger.info("Claude Vision AI 분석기 초기화 (SMC 전략)")
+        self.client = genai.Client(api_key=Config.GEMINI_API_KEY)
+        logger.info(f"Gemini Vision AI 분석기 초기화 (모델: {Config.GEMINI_MODEL})")
 
     def analyze_chart(self, chart_image: bytes, additional_context: str = "") -> dict:
-        """차트 이미지를 Claude Vision으로 SMC 분석"""
+        """차트 이미지를 Gemini Vision으로 SMC 분석"""
         if not chart_image:
             logger.error("분석할 차트 이미지 없음")
             return self._empty_result()
 
-        image_b64 = base64.standard_b64encode(chart_image).decode("utf-8")
-
-        user_content = [
-            {
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": "image/png",
-                    "data": image_b64,
-                },
-            },
-            {
-                "type": "text",
-                "text": (
-                    "이 암호화폐 차트를 SMC(Smart Money Concepts) 관점에서 분석해주세요.\n"
-                    "오더블럭, FVG, 추세선, 채널, 거짓돌파/함정을 찾고 스캘핑 매매 신호를 생성해주세요.\n"
-                    f"{additional_context}"
-                ),
-            },
-        ]
+        user_text = (
+            "이 암호화폐 차트를 SMC(Smart Money Concepts) 관점에서 분석해주세요.\n"
+            "오더블럭, FVG, 추세선, 채널, 거짓돌파/함정을 찾고 스캘핑 매매 신호를 생성해주세요.\n"
+            f"{additional_context}"
+        )
 
         try:
-            response = self.client.messages.create(
-                model=Config.CLAUDE_MODEL,
-                max_tokens=2000,
-                system=SMC_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_content}],
+            response = self.client.models.generate_content(
+                model=Config.GEMINI_MODEL,
+                contents=[
+                    types.Part.from_bytes(data=chart_image, mime_type="image/png"),
+                    user_text,
+                ],
+                config=types.GenerateContentConfig(
+                    system_instruction=SMC_SYSTEM_PROMPT,
+                    max_output_tokens=2000,
+                    temperature=0.3,
+                ),
             )
 
-            result_text = response.content[0].text
+            result_text = response.text
             logger.debug(f"AI 응답: {result_text[:300]}...")
 
             return self._parse_response(result_text)
 
-        except anthropic.APIError as e:
-            logger.error(f"Claude API 에러: {e}")
-            return self._empty_result()
         except Exception as e:
-            logger.error(f"AI 분석 실패: {e}")
+            logger.error(f"Gemini API 에러: {e}")
             return self._empty_result()
 
     def _parse_response(self, text: str) -> dict:

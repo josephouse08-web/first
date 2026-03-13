@@ -9,8 +9,12 @@ class Config:
     UPBIT_ACCESS_KEY = os.getenv("UPBIT_ACCESS_KEY", "")
     UPBIT_SECRET_KEY = os.getenv("UPBIT_SECRET_KEY", "")
 
-    # Anthropic API
+    # Anthropic API (레거시)
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+
+    # Gemini API
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+    GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
 
     # Trading Settings
     COIN = os.getenv("COIN", "KRW-BTC")
@@ -22,14 +26,14 @@ class Config:
 
     # Timeframes for SMC scalping (작은 → 큰 순서)
     TIMEFRAMES = ["minute5", "minute15", "minute30", "minute60"]
-    CANDLE_COUNT = 80  # 구조물 식별에 충분한 캔들 수
+    CANDLE_COUNT = 150  # 5분봉 150개 = 약 12.5시간 (넓은 구조물 파악)
 
     # Risk Management
     MAX_DAILY_TRADES = 20
     MIN_CONFIDENCE = 0.7
     MIN_CONFLUENCE = 2      # SMC 다중 근거 최소 개수
     MIN_TRADE_INTERVAL = 90  # 스캘핑: 90초 간격
-    MAX_HOLD_MINUTES = 30    # 최대 보유 시간 (분) - 초과 시 강제 청산
+    MAX_HOLD_MINUTES = 90    # 최대 보유 시간 (분) - 초과 시 강제 청산
     CONSECUTIVE_LOSS_LIMIT = 3  # 연패 쿨다운 발동 기준
     CONSECUTIVE_LOSS_COOLDOWN = 300  # 연패 시 쿨다운 (초) - 5분
 
