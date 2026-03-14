@@ -68,8 +68,8 @@ class SMCBacktester:
     """SMC 전략 백테스터"""
 
     # 트레일링 스탑 설정
-    TRAILING_ACTIVATE_PCT = 0.4   # 목표가까지 40% 도달 시 트레일링 활성화
-    TRAILING_STEP_PCT = 0.25      # 수익의 25% 지점에 손절선 이동 (75% 수익 보호)
+    TRAILING_ACTIVATE_PCT = 0.6   # 목표가까지 60% 도달 시 트레일링 활성화
+    TRAILING_STEP_PCT = 0.5       # 수익의 50% 지점에 손절선 이동 (50% 수익 보호)
     CONSECUTIVE_LOSS_COOLDOWN = 2  # N연패 후 1사이클 쿨다운
     MAX_STOP_LOSS_PCT = 1.5       # 1건당 최대 손절폭 % (레버리지 적용 전 기준)
     MIN_RR_RATIO = 1.5            # 최소 R:R 비율
