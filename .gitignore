@@ -1,0 +1,7 @@
+.env
+logs/
+charts/
+__pycache__/
+*.pyc
+*.pyo
+*.pdf

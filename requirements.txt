@@ -1,0 +1,6 @@
+pyupbit>=0.2.33
+anthropic>=0.40.0
+mplfinance>=0.12.10b0
+pandas>=2.0.0
+matplotlib>=3.7.0
+python-dotenv>=1.0.0
