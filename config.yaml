@@ -1,0 +1,119 @@
+# ============================================================
+# CryptoBot 설정 파일
+# ============================================================
+
+# 거래소 설정
+exchange:
+  # binance / upbit / paper (모의거래)
+  type: "paper"
+
+  # Binance API (실거래 시 입력)
+  api_key: ""
+  api_secret: ""
+  use_futures: false
+
+  # Upbit API (실거래 시 입력)
+  access_key: ""
+  secret_key: ""
+
+# 트레이딩 설정
+trading:
+  symbols:
+    - "BTC/USDT"
+    - "ETH/USDT"
+  interval: "5m"           # 캔들 간격: 1m, 5m, 15m, 30m, 1h, 4h, 1d
+  poll_seconds: 15         # 데이터 폴링 간격 (초)
+  initial_balance: 10000   # 초기 자본금 (USDT)
+  allow_short: false       # 숏 포지션 허용 여부
+  min_strategy_agreement: 0.5  # 전략 동의 비율 (50% 이상 동의 시 실행)
+
+# 전략 설정 (ICT 기반 - 쉽알남 매매법)
+strategies:
+  # === 기존 전략 (비활성화) ===
+  rsi:
+    enabled: false
+    rsi_period: 14
+    rsi_oversold: 30
+    rsi_overbought: 70
+
+  macd:
+    enabled: false
+    macd_fast: 12
+    macd_slow: 26
+    macd_signal: 9
+
+  bollinger:
+    enabled: false
+    bb_period: 20
+    bb_std: 2.0
+
+  multi_indicator:
+    enabled: false
+    min_confirmations: 3
+
+  # === ICT 전략 (쉽알남 매매법) ===
+  orderblock:
+    enabled: true
+    ob_lookback: 50
+    impulse_threshold: 1.5
+    ob_max_age: 20
+
+  fvg:
+    enabled: true
+    fvg_lookback: 50
+    min_gap_atr_ratio: 0.3
+    fvg_max_age: 30
+
+  trendline_channel:
+    enabled: true
+    swing_lookback: 5
+    min_touches: 2
+    channel_tolerance: 0.003
+
+  fakeout:
+    enabled: true
+    swing_lookback: 5
+    wick_ratio_threshold: 0.6
+    structure_lookback: 30
+
+  ict_combined:
+    enabled: true
+    min_confluence: 2
+
+# 리스크 관리
+risk:
+  max_risk_per_trade: 0.02     # 거래당 최대 리스크 (2%)
+  max_portfolio_risk: 0.06     # 전체 포트폴리오 최대 리스크 (6%)
+  max_positions: 5             # 최대 동시 포지션 수
+  stop_loss_pct: 0.03          # 스탑로스 (3%)
+  take_profit_pct: 0.06        # 테이크프로핏 (6%)
+  trailing_stop_pct: 2.0       # 트레일링 스탑 (2%)
+  max_daily_loss: 0.05         # 일일 최대 손실 (5%)
+  max_drawdown: 0.15           # 최대 드로다운 (15%)
+  max_daily_trades: 20         # 일일 최대 거래 횟수
+  min_signal_strength: 0.3     # 최소 시그널 강도
+
+# 알림 설정
+notifications:
+  console: true
+
+  telegram:
+    enabled: false
+    bot_token: ""
+    chat_id: ""
+
+  discord:
+    enabled: false
+    webhook_url: ""
+
+# 대시보드 설정
+dashboard:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8080
+
+# 백테스트 설정
+backtest:
+  initial_balance: 10000
+  commission_rate: 0.001  # 0.1%
+  lookback: 50
